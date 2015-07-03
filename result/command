@@ -1,1 +1,0 @@
-os.getcwd()[os.getcwd().rfind(u'/') + 1:]
