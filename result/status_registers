@@ -1,0 +1,31 @@
+board_clock_estimate: 200
+clock_frequency: 200000000
+pps_count: 2147483648
+fstatus0:
+Container:
+    coarse_bits = 9
+    fine_bits = 12
+    sync_val = 1
+    xaui_lnkdn = False
+    xaui_over = False
+    clk_err = False
+    adc_disabled = False
+    ct_error = False
+    adc_overrange = True
+    fine_fft_overrange = False
+    coarse_fft_overrange = True
+    quant_overrange = False
+fstatus1:
+Container:
+    coarse_bits = 9
+    fine_bits = 12
+    sync_val = 1
+    xaui_lnkdn = False
+    xaui_over = False
+    clk_err = False
+    adc_disabled = False
+    ct_error = False
+    adc_overrange = True
+    fine_fft_overrange = False
+    coarse_fft_overrange = True
+    quant_overrange = False
