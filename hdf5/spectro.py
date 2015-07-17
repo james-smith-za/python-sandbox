@@ -12,6 +12,8 @@ import collections # Has the most excellent deque object which helps tremendousl
 
 import socket
 import struct
+import sys
+import os
 
 import matplotlib
 matplotlib.use('gtkagg')
@@ -19,9 +21,13 @@ from matplotlib import pyplot as plt
 from matplotlib import animation
 from matplotlib.widgets import Slider
 
-current_data_frame = multiprocessing.Array('f', 2048) # single-precision floating-point for now.
+data_width = 1024
+
+current_data_frame = multiprocessing.Array('f', data_width) # single-precision floating-point for now.
 script_run = multiprocessing.Value('B', 1) # Boolean to keep track of whether the program shold actually run, initialise to 1
 video_average_length = multiprocessing.Value('B', 10) # This is a bit of a hack, but it seems to work fine...
+
+
 
 def ctrl_c(signal, frame):
     '''
@@ -57,38 +63,59 @@ def UDP_receiver(output_queue):
     while script_run.value == 1:
 
         interleavedWindow = []
-        for packetNo in range (0, 8):
+        for packetNo in range (0, 4):
             data, addr = sock.recvfrom(4096)
-            print 'Got packet at  ', time.ctime(), ' from ', addr
-            interleavedWindow.extend( list(struct.unpack("!1024i", data)) ) #interpret as integer data and append to window list
+            #print 'Got packet ', packetNo, '  at  ', time.ctime(), ' from ', addr
+
+            interleavedWindow.extend( list(struct.unpack("!IQHH1024i", data)) ) #interpret as integer data and append to window list
         output_queue.put(interleavedWindow)
 
     print 'poison pill received by data generator'
     output_queue.put(None)
 
 def deinterleaver(input_queue, output_queue):
-    while script_run.value == 1:
-        I = []
-        Q = []
-        U = []
-        V = []
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+    time.sleep(1)
+    while 1:
+        LCP = []
+        RCP = []
 
         interleavedWindow = input_queue.get()
+        if interleavedWindow == None:
+            break
+
         index = 0
 
-        for i in range(0, 2048):
-            I.append(interleavedWindow[index])
-            current_data_frame[i] = interleavedWindow[index]
+        for i in range(0, data_width/2): # data_width/2 because even and odd are interleaved
+            even1real = interleavedWindow[index]
             index += 1
-            Q.append(interleavedWindow[index])
+            even1imag = interleavedWindow[index]
             index += 1
-            U.append(interleavedWindow[index])
-            index += 1
-            V.append(interleavedWindow[index])
-            index += 1
+            LCP.append(even1real + even1imag*1j)
+            current_data_frame[2*i] = np.square(np.abs(even1real + even1imag*1j))
 
-        I = np.array(I)
-        output_queue.put(I)
+            odd1real = interleavedWindow[index]
+            index += 1
+            odd1imag = interleavedWindow[index]
+            index += 1
+            LCP.append(odd1real + odd1imag*1j)
+            current_data_frame[2*i + 1] = np.square(np.abs(odd1real + odd1imag*1j))
+
+            even2real = interleavedWindow[index]
+            index += 1
+            even2imag = interleavedWindow[index]
+            index += 1
+            RCP.append(even2real + even2imag*1j)
+
+            odd2real = interleavedWindow[index]
+            index += 1
+            odd2imag = interleavedWindow[index]
+            index += 1
+            RCP.append(odd2real + odd2imag*1j)
+
+        LCP = np.array(LCP)
+        RCP = np.array(RCP)
+        output_queue.put((LCP,RCP))
     print 'deinterleaver found poison pill'
     output_queue.put(None)
 
@@ -118,8 +145,7 @@ def plotter():
     plt.subplots_adjust(left = 0.1, bottom = 0.25)
     ax = plt.subplot(2, 1, 2)
     line, = ax.plot([], [], lw=1, marker='o')
-    ax.set_ylim(0,10000)
-    ax.set_xlim(0,2047)
+    ax.set_xlim(0,400)
 
     data = collections.deque(maxlen = waterfall_size)
 
@@ -132,15 +158,17 @@ def plotter():
     video_average_length_slider.on_changed(update)
 
     def init():
-        x = np.zeros(2048)
-        y = np.zeros(2048)
+        x = np.zeros(data_width)
+        y = np.zeros(data_width)
         line.set_data(x,y)
         return line,
 
     def animate(*args):
-        x = range(2048)
+        if script_run.value != 1:
+            sys.exit()
+        x = np.arange(0, 400, 400.0 / 1024.0)
         data.appendleft(current_data_frame[:])
-        y = np.zeros(2048)
+        y = np.zeros(data_width)
         for i in range(video_average_length.value):
             if i < len(data):
                 y += np.array(data[i])
@@ -154,6 +182,20 @@ def plotter():
     plt.show()
     print 'plotter process finished.'
 
+def diagnostic_info(q1, q2):
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+    print 'PID: ', os.getpid()
+    diagnose=True
+    q1s, q2s = 0, 0
+    while diagnose or q1s > 0 or q2s > 0 :
+        q1s, q2s = q1.qsize(), q2.qsize()
+        sys.stdout.write('\rdata-deint queue length: %d\t\tdeint-hdf5 queue length: %d'%(q1s, q2s))
+        sys.stdout.flush()
+        if script_run.value == 0:
+            diagnose = False
+        time.sleep(0.2)
+
+    print 'diagnostic process joining.'
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, ctrl_c)
@@ -165,11 +207,13 @@ if __name__ == '__main__':
     deinterleaver_process = multiprocessing.Process(name='deinterlacer', target=deinterleaver, args=(data_deint_queue, deint_hdf5_queue))
     hdf5_writer_process = multiprocessing.Process(name='HDF5 Writer', target=hdf5_writer, args=(deint_hdf5_queue,))
     plotter_process = multiprocessing.Process(name="Plotter", target=plotter)
+    diagnostics_process = multiprocessing.Process(name='diag', target=diagnostic_info, args=(data_deint_queue, deint_hdf5_queue))
 
     UDP_receiver_process.start()
     deinterleaver_process.start()
     hdf5_writer_process.start()
     plotter_process.start()
+    diagnostics_process.start()
 
     signal.pause()
 
@@ -177,4 +221,6 @@ if __name__ == '__main__':
     deinterleaver_process.join()
     hdf5_writer_process.join()
     plotter_process.join()
+    diagnostics_process.join()
 
+    print '\n'

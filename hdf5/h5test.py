@@ -31,6 +31,7 @@ def ctrl_c(signal, frame):
     script_run.value = 0
 
 
+
 def random_data_generator(output_queue):
     '''
     This process destined to be replaced by an actual socket once I've finished working with Craig
