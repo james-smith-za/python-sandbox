@@ -42,8 +42,7 @@ def ctrl_c(signal, frame):
 ###################### Process functions ######################
 def UDP_receiver(output_queue):
     '''
-    This process destined to be replaced by an actual socket once I've finished working with Craig
-    on the outputs of his FPGA fabric.
+    A life dedicated to grabbing UDP packets and sticking them on a queue
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
 
@@ -64,10 +63,27 @@ def UDP_receiver(output_queue):
 
     print 'Bound to UDP socket', local_interface, ':', local_port
 
+    while script_run.value == 1:
+        data, addr = sock.recvfrom(1040) # Sufficiently large that it can handle a big enough packet
+        output_queue.put(data)
+
+    output_queue.put(None)
+    print 'udp receiver put poison pill on queue'
+
+
+def UDP_unpacker(input_queue, output_queue):
+    '''
+    Unpacks the previous process's UDP packets
+    '''
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     counter = 0 # Packets start with zero (hopefully)
 
     header_length = 16
-    data, addr = sock.recvfrom(10240) # Sufficiently large that it can handle a big enough packet
+    data = input_queue.get()
+    if data == None:
+        output_queue.put(None)
+        print 'udp unpacker received poison pill'
+        sys.exit()
     packet_length = len(data)
     data_length = packet_length - header_length
     n_samples = data_length / 4
@@ -96,8 +112,10 @@ def UDP_receiver(output_queue):
     interleaved_window = []
     interleaved_window.extend(packet_data)
 
-    while (script_run.value == 1):
-        data, addr = sock.recvfrom(packet_length)
+    while 1:
+        data = input_queue.get()
+        if data == None:
+            break
         magic_no, frame_no, subframe_no, mode, frame_size = struct.unpack('!IQHBB%dx'%(data_length), data)
         #log_file.write(' frame_no: %d subframe_no: %d frame_size: %d mode: %d '%(frame_no, subframe_no, frame_size, mode ))
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
@@ -121,7 +139,7 @@ def UDP_receiver(output_queue):
             bad_frames.value += 1
             #log_file.write('bad pkt\n')
 
-    print 'poison pill received by data generator'
+    print 'poison pill received by udp unpacker'
     output_queue.put(None)
     #log_file.close()
 
@@ -169,7 +187,7 @@ def dummy_queue_emptyer(input_queue):
     print 'dummy received poison pill'
 
 
-def diagnostic_info(q1, q2):
+def diagnostic_info(q1, q2, q3):
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     print 'PID: ', os.getpid()
     print 'Waiting for first packet...'
@@ -190,13 +208,14 @@ def diagnostic_info(q1, q2):
     diagnose=True
 
     while diagnose or q1.qsize() > 0 or q2.qsize() > 0:
-        printstr = '\r' + str(diagnose or q1.qsize() > 0 or q2.qsize() > 0) + \
-                   ' Frame number:' + ('%d'%(frame_number.value)).rjust(12) +\
-                   ' Good frames:' + ('%d'%(good_frames.value)).rjust(12) +\
-                   ' Bad frames:' + ('%d'%(bad_frames.value)).rjust(12) +\
-                   ' Q1 length:' + ('%d'%(q1.qsize())).rjust(12) +\
-                   ' Q2 length:' + ('%d'%(q2.qsize())).rjust(12) +\
-                   ' Frame drop percentage: %f'%(float(bad_frames.value) / (good_frames.value + bad_frames.value + 1) * 100)
+        printstr = '\r' +\
+                   '| Frame number:' + ('%d'%(frame_number.value)).rjust(12) +\
+                   '| Good frames:' + ('%d'%(good_frames.value)).rjust(12) +\
+                   '| Bad frames:' + ('%d'%(bad_frames.value)).rjust(12) +\
+                   '| Q1 length:' + ('%d'%(q1.qsize())).rjust(12) +\
+                   '| Q2 length:' + ('%d'%(q2.qsize())).rjust(12) +\
+                   '| Q3 length:' + ('%d'%(q3.qsize())).rjust(12) +\
+                   '| Frame drop percentage: %f'%(float(bad_frames.value) / (good_frames.value + bad_frames.value + 1) * 100)
         sys.stdout.write(printstr)
         sys.stdout.flush()
         if script_run.value == 0:
@@ -207,16 +226,19 @@ def diagnostic_info(q1, q2):
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, ctrl_c)
 
-    udp_deint_queue = multiprocessing.Queue()
+    receive_unpack_queue = multiprocessing.Queue()
+    unpack_deint_queue = multiprocessing.Queue()
     deint_storage_queue = multiprocessing.Queue()
 
-    UDP_receiver_process = multiprocessing.Process(name='UDP receiver', target=UDP_receiver, args=(udp_deint_queue,))
+    UDP_receiver_process = multiprocessing.Process(name='UDP receiver', target=UDP_receiver, args=(receive_unpack_queue,))
+    UDP_unpacker_process = multiprocessing.Process(name='UDP receiver', target=UDP_unpacker, args=(receive_unpack_queue, unpack_deint_queue,))
     # This is where a decision should be made as to which deinterleaver process to start.
-    deinterleaver_process = multiprocessing.Process(name='deinterleaver', target=FFT_deinterleaver, args=(udp_deint_queue, deint_storage_queue))
+    deinterleaver_process = multiprocessing.Process(name='deinterleaver', target=FFT_deinterleaver, args=(unpack_deint_queue, deint_storage_queue))
     dummy_process = multiprocessing.Process(name='dummy', target=dummy_queue_emptyer, args=(deint_storage_queue,))
-    diagnostics_process = multiprocessing.Process(name='diagnostics', target=diagnostic_info, args=(udp_deint_queue,deint_storage_queue))
+    diagnostics_process = multiprocessing.Process(name='diagnostics', target=diagnostic_info, args=(receive_unpack_queue, unpack_deint_queue,deint_storage_queue))
 
     UDP_receiver_process.start()
+    UDP_unpacker_process.start()
     deinterleaver_process.start()
     dummy_process.start()
     diagnostics_process.start()
@@ -224,6 +246,7 @@ if __name__ == '__main__':
     signal.pause()
 
     UDP_receiver_process.join()
+    UDP_unpacker_process.join()
     deinterleaver_process.join()
     dummy_process.join()
     diagnostics_process.join()
