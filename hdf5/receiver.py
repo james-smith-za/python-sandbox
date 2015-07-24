@@ -47,8 +47,10 @@ def UDP_receiver(output_queue):
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
 
-    udp_process_priority = -11
-    time.sleep(0.2) # Just to give the other processes time to print their messages
+    #log_file = open('udp_logfile', 'w')
+
+    udp_process_priority = -19
+    time.sleep(0.2) # Just to give the other processes time to print their messages so this doesn't get lost
     command_string = 'sudo renice ' + str(udp_process_priority) + ' ' + str(os.getpid())
     print 'Please enter password to elevate priority of UDP handler process:'
     print command_string
@@ -72,6 +74,8 @@ def UDP_receiver(output_queue):
     magic_no, frame_no, subframe_no, frame_size, mode = struct.unpack('!IQBBH%dx'%(data_length), data)
     packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
+    #log_file.write(' frame_no: %d subframe_no: %d frame_size: %d mode: %d '%(frame_no, subframe_no, frame_size, mode ))
+
     if magic_no != 439041101:
         print 'Magic number unexpected value %d'%(magic_no)
         output_queue.put(None)
@@ -84,8 +88,10 @@ def UDP_receiver(output_queue):
     frame_len.value = 16
     #fft_win_len.value = frame_size*n_samples
     fft_win_len.value = 1024
-    #interleaved_window_len = data_length*frame_size
-    interleaved_window_len = 16384
+    #interleaved_window_len = data_length*frame_size / 4 # /4 to take into account that there are 4 bytes per element
+    interleaved_window_len = 4096
+
+    counter += 1 # can't forget this, otherwise we miss the first frame (if we happen to catch the first packet, which is usually the case)
 
     interleaved_window = []
     interleaved_window.extend(packet_data)
@@ -93,23 +99,31 @@ def UDP_receiver(output_queue):
     while (script_run.value == 1):
         data, addr = sock.recvfrom(packet_length)
         magic_no, frame_no, subframe_no, mode, frame_size = struct.unpack('!IQHBB%dx'%(data_length), data)
+        #log_file.write(' frame_no: %d subframe_no: %d frame_size: %d mode: %d '%(frame_no, subframe_no, frame_size, mode ))
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
         if subframe_no == counter:
             interleaved_window.extend(packet_data)
+            #log_file.write('good pkt - ')
             if len(interleaved_window) < interleaved_window_len:
                 counter += 1
+                #log_file.write('interleaved window length now %d, counter inc to %d\n'%(len(interleaved_window),counter))
             else:
+                counter = 0
                 output_queue.put((frame_no, interleaved_window))
+                interleaved_window = []
                 good_frames.value += 1
                 frame_number.value = frame_no
+                #log_file.write('fin frame %d\n'%(frame_no))
         else:
             counter = 0
             interleaved_window = []
             bad_frames.value += 1
+            #log_file.write('bad pkt\n')
 
     print 'poison pill received by data generator'
     output_queue.put(None)
+    #log_file.close()
 
 def FFT_deinterleaver(input_queue, output_queue):
     '''
@@ -175,13 +189,14 @@ def diagnostic_info(q1, q2):
     print printstr
     diagnose=True
 
-    while diagnose:
-        printstr = '\r' + \
+    while diagnose or q1.qsize() > 0 or q2.qsize() > 0:
+        printstr = '\r' + str(diagnose or q1.qsize() > 0 or q2.qsize() > 0) + \
                    ' Frame number:' + ('%d'%(frame_number.value)).rjust(12) +\
                    ' Good frames:' + ('%d'%(good_frames.value)).rjust(12) +\
                    ' Bad frames:' + ('%d'%(bad_frames.value)).rjust(12) +\
                    ' Q1 length:' + ('%d'%(q1.qsize())).rjust(12) +\
-                   ' Q2 length:' + ('%d'%(q2.qsize())).rjust(12)
+                   ' Q2 length:' + ('%d'%(q2.qsize())).rjust(12) +\
+                   ' Frame drop percentage: %f'%(float(bad_frames.value) / (good_frames.value + bad_frames.value + 1) * 100)
         sys.stdout.write(printstr)
         sys.stdout.flush()
         if script_run.value == 0:
