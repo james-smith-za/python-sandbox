@@ -36,7 +36,7 @@ good_frames = multiprocessing.Value('L', 0)
 bad_frames = multiprocessing.Value('L', 0)
 
 
-video_average_length = multiprocessing.Value('B', 10) # This is a bit of a hack, but it seems to work fine...
+video_average_length = multiprocessing.Value('B', 1) # This is a bit of a hack, but it seems to work fine...
 
 
 ###################### Signal handler functions ######################
@@ -90,7 +90,7 @@ def UDP_unpacker(input_queue, output_queue):
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     counter = 0 # Packets start with zero (hopefully)
 
-    log_file = open('udp_logfile', 'w')
+    #log_file = open('udp_logfile', 'w')
 
     header_length = 16
     data = input_queue.get()
@@ -188,7 +188,7 @@ def FFT_deinterleaver(input_queue, output_queue):
     print 'deinterleaver found poison pill'
     output_queue.put(None)
 
-def queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 300):
+def queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 150):
     '''
     Decimates the queue by the specified factor. Passes full data rate out to one queue for recording, and decimated data out to plotting queue.
     '''
@@ -203,9 +203,9 @@ def queue_decimator(input_queue, output_queue, output_decimated_queue, decimatio
         if counter == decimation_factor:
             counter = 0
             timestamp, LCP, RCP = input_tuple
-            LCP_power = np.square(np.abs(LCP))
-            RCP_power = np.square(np.abs(RCP))
-            output_decimated_queue.put((LCP, RCP))
+            LCP_power = 10*np.log10(np.square(np.abs(LCP)) + 1e-10)
+            RCP_power = 10*np.log10(np.square(np.abs(RCP)) + 1e-10)
+            output_decimated_queue.put((LCP_power, RCP_power))
 
     print 'queue decimator received poison pill'
     output_queue.put(None)
@@ -219,12 +219,13 @@ def plotter(input_queue):
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     waterfall_size = 150 # This makes it about 75 seconds in theory. Drawing the graph sometimes takes a bit longer.
-    fig = plt.figure(figsize=(20,15))
+    fig = plt.figure(figsize=(20,14))
     plt.subplots_adjust(left = 0.1, bottom = 0.25)
     ax = plt.subplot(1, 1, 1)
     line_lcp, = ax.plot([], [], 'b', lw=1)
     line_rcp, = ax.plot([], [], 'r', lw=1)
     ax.set_xlim(0,400)
+    ax.set_ylim(-100,200)
 
     vav_data_lcp = collections.deque(maxlen = waterfall_size)
     vav_data_rcp = collections.deque(maxlen = waterfall_size)
@@ -259,18 +260,18 @@ def plotter(input_queue):
                 rcp += np.array(vav_data_rcp[i])
         lcp /= video_average_length.value
         rcp /= video_average_length.value
-        graph_max = 0
-        if lcp.max() > rcp.max():
-            graph_max = lcp.max()
-        else:
-            graph_max = rcp.max()
-        ax.set_ylim(0,graph_max + 1)
+        graph_max = 10
+        #if lcp.max() > rcp.max():
+        #    graph_max = lcp.max()
+        #else:
+        #    graph_max = rcp.max()
+        #ax.set_ylim(0,graph_max + 1)
         line_lcp.set_data(x,lcp)
         line_rcp.set_data(x,rcp)
         return line_lcp,line_rcp
 
     # Set the animation off to a start...
-    anim = animation.FuncAnimation(fig, animate, init_func=init, blit=True, interval=5)
+    anim = animation.FuncAnimation(fig, animate, init_func=init, blit=True)
     plt.show()
     print 'plotter process finished.'
 

@@ -15,15 +15,21 @@ import struct
 import sys
 import os
 
+import collections
 import matplotlib
-matplotlib.use('gtkagg')
+matplotlib.use('gtkagg') # Necessary on optimus for some reason - older version of matplotlib.
 from matplotlib import pyplot as plt
 from matplotlib import animation
 from matplotlib.widgets import Slider
 
-data_width = 1024
+data_width = multiprocessing.Value('H', 1024)
+frame_length = multiprocessing.Value('H', 16)
 
-current_data_frame = multiprocessing.Array('f', data_width) # single-precision floating-point for now.
+data_stream_1 = multiprocessing.Array('f', data_width.value) # single-precision floating-point for now.
+data_stream_2 = multiprocessing.Array('f', data_width.value)
+data_stream_3 = multiprocessing.Array('f', data_width.value)
+data_stream_4 = multiprocessing.Array('f', data_width.value)
+
 script_run = multiprocessing.Value('B', 1) # Boolean to keep track of whether the program shold actually run, initialise to 1
 video_average_length = multiprocessing.Value('B', 10) # This is a bit of a hack, but it seems to work fine...
 
@@ -73,51 +79,50 @@ def UDP_receiver(output_queue):
     print 'poison pill received by data generator'
     output_queue.put(None)
 
-def deinterleaver(input_queue, output_queue):
+def raw_deinterleaver(input_queue, output_queue, plot_queue):
+    '''
+    Process for deinterleaving raw FFT data and plotting.
+    '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     time.sleep(1)
     while 1:
         LCP = []
         RCP = []
 
-        interleavedWindow = input_queue.get()
+        interleavedWindow = np.array(input_queue.get())
         if interleavedWindow == None:
             break
 
         index = 0
 
-        for i in range(0, data_width/2): # data_width/2 because even and odd are interleaved
-            even1real = interleavedWindow[index]
-            index += 1
-            even1imag = interleavedWindow[index]
-            index += 1
-            LCP.append(even1real + even1imag*1j)
-            current_data_frame[2*i] = np.square(np.abs(even1real + even1imag*1j))
+        even1 = (interleavedWindow[0::8] + interleavedWindow[1::8]*1j)
+        odd1  = (interleavedWindow[2::8] + interleavedWindow[3::8]*1j)
+        LCP   = np.reshape(np.dstack((even1, odd1)), (1,-1))
 
-            odd1real = interleavedWindow[index]
-            index += 1
-            odd1imag = interleavedWindow[index]
-            index += 1
-            LCP.append(odd1real + odd1imag*1j)
-            current_data_frame[2*i + 1] = np.square(np.abs(odd1real + odd1imag*1j))
+        even2 = (interleavedWindow[4::8] + interleavedWindow[5::8]*1j)
+        odd2  = (interleavedWindow[6::8] + interleavedWindow[7::8]*1j)
+        RCP   = np.reshape(np.dstack((even2, odd2)), (1, -1))
 
-            even2real = interleavedWindow[index]
-            index += 1
-            even2imag = interleavedWindow[index]
-            index += 1
-            RCP.append(even2real + even2imag*1j)
+        #need to figure out here how to write out to the plotting function.
 
-            odd2real = interleavedWindow[index]
-            index += 1
-            odd2imag = interleavedWindow[index]
-            index += 1
-            RCP.append(odd2real + odd2imag*1j)
-
-        LCP = np.array(LCP)
-        RCP = np.array(RCP)
         output_queue.put((LCP,RCP))
-    print 'deinterleaver found poison pill'
+        plot_queue.put((LCP,RCP))
+    print 'raw_deinterleaver found poison pill'
     output_queue.put(None)
+
+def raw_plot_decimator(input_queue, decimation = 10):
+    '''
+    Processing for decimating the rate at which the data is plotted. This is for the raw FFT data case.
+    '''
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+    data = input_queue.get()
+    while data != None:
+        for i in range(decimation):
+            data = input_queue.get()
+        LCP, RCP = data
+        for i in range(data_width):
+            data_stream_1[i] = np.square(np.abs(LCP[i]))
+            data_stream_2[i] = np.square(np.abs(RCP[i]))
 
 def hdf5_writer(input_queue):
     '''
@@ -143,11 +148,13 @@ def plotter():
     waterfall_size = 150 # This makes it about 75 seconds in theory. Drawing the graph sometimes takes a bit longer.
     fig = plt.figure(figsize=(20,15))
     plt.subplots_adjust(left = 0.1, bottom = 0.25)
-    ax = plt.subplot(2, 1, 2)
-    line, = ax.plot([], [], lw=1, marker='o')
+    ax = plt.subplot(1, 1, 1)
+    line_lcp, = ax.plot([], [], 'bo', lw=1)
+    line_rcp, = ax.plot([], [], 'ro', lw=1)
     ax.set_xlim(0,400)
 
-    data = collections.deque(maxlen = waterfall_size)
+    vav_data_lcp = collections.deque(maxlen = waterfall_size)
+    vav_data_rcp = collections.deque(maxlen = waterfall_size)
 
     slider_ax = plt.axes([0.25, 0.1, 0.65, 0.03])
 
@@ -160,21 +167,32 @@ def plotter():
     def init():
         x = np.zeros(data_width)
         y = np.zeros(data_width)
-        line.set_data(x,y)
+        line_lcp.set_data(x,y)
+        line_rcp.set_data(x,y)
         return line,
 
     def animate(*args):
         if script_run.value != 1:
             sys.exit()
         x = np.arange(0, 400, 400.0 / 1024.0)
-        data.appendleft(current_data_frame[:])
-        y = np.zeros(data_width)
+        vav_data_lcp.appendleft(data_stream_1[:])
+        vav_data_rcp.appendleft(data_stream_2[:])
+        lcp = np.zeros(data_width)
+        rcp = np.zeros(data_width)
         for i in range(video_average_length.value):
-            if i < len(data):
-                y += np.array(data[i])
-        y /= video_average_length.value
-        ax.set_ylim(0,y.max() + 1)
-        line.set_data(x,y)
+            if i < len(vav_data):
+                lcp += np.array(vav_data_lcp[i])
+                rcp += np.array(vav_data_rcp[i])
+        lcp /= video_average_length.value
+        rcp /= video_average_length.value
+        graph_max = 0
+        if lcp.max() > rcp.max():
+            graph_max = lcp.max()
+        else:
+            graph_max = rcp.max()
+        ax.set_ylim(0,graph_max + 1)
+        line_lcp.set_data(x,lcp)
+        line_rcp.set_data(x.rcp)
         return line,
 
     # Set the animation off to a start...
@@ -202,15 +220,24 @@ if __name__ == '__main__':
 
     data_deint_queue = multiprocessing.Queue()
     deint_hdf5_queue = multiprocessing.Queue()
+    deint_plot_queue = multiprocessing.Queue()
+
+    # Initialise shared memory values
+    for i in range(data_width):
+        data_stream_1[i] = 0.0
+        data_stream_2[i] = 0.0
+        data_stream_3[i] = 0.0
+        data_stream_4[i] = 0.0
+
 
     UDP_receiver_process = multiprocessing.Process(name='UDP receiver', target=UDP_receiver, args=(data_deint_queue,))
-    deinterleaver_process = multiprocessing.Process(name='deinterlacer', target=deinterleaver, args=(data_deint_queue, deint_hdf5_queue))
+    raw_deinterleaver_process = multiprocessing.Process(name='raw deinterleaver', target=raw_deinterleaver, args=(data_deint_queue, deint_hdf5_queue))
     hdf5_writer_process = multiprocessing.Process(name='HDF5 Writer', target=hdf5_writer, args=(deint_hdf5_queue,))
     plotter_process = multiprocessing.Process(name="Plotter", target=plotter)
     diagnostics_process = multiprocessing.Process(name='diag', target=diagnostic_info, args=(data_deint_queue, deint_hdf5_queue))
 
     UDP_receiver_process.start()
-    deinterleaver_process.start()
+    raw_deinterleaver_process.start()
     hdf5_writer_process.start()
     plotter_process.start()
     diagnostics_process.start()
@@ -218,7 +245,7 @@ if __name__ == '__main__':
     signal.pause()
 
     UDP_receiver_process.join()
-    deinterleaver_process.join()
+    raw_deinterleaver_process.join()
     hdf5_writer_process.join()
     plotter_process.join()
     diagnostics_process.join()
