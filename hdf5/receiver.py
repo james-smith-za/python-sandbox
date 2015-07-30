@@ -26,6 +26,7 @@ data_width = 1024
 script_run = multiprocessing.Value('B', 1) # Boolean to keep track of whether the program shold actually run, initialise to 1
 
 data_mode = multiprocessing.Value('h', -1) # Signed short so that I can use a -1 until such time as the right mode comes through
+
 pkt_len = multiprocessing.Value('H', 0)
 fft_win_len = multiprocessing.Value('H', 0)
 pkt_smpl_len = multiprocessing.Value('H', 0)
@@ -52,7 +53,7 @@ def ctrl_c(signal, frame):
     script_run.value = 0
 
 
-###################### Process functions ######################
+###################### UDP functions ######################
 def UDP_receiver(output_queue):
     '''
     A life dedicated to grabbing UDP packets and sticking them on a queue
@@ -81,7 +82,6 @@ def UDP_receiver(output_queue):
 
     output_queue.put(None)
     print 'udp receiver put poison pill on queue'
-
 
 def UDP_unpacker(input_queue, output_queue):
     '''
@@ -156,15 +156,14 @@ def UDP_unpacker(input_queue, output_queue):
     output_queue.put(None)
     #log_file.close()
 
-def FFT_deinterleaver(input_queue, output_queue):
+############################### Complex FFT related functions ##############################################
+
+def fft_deinterleaver(input_queue, output_queue):
     '''
-    Process for deinterleaving raw FFT data and plotting.
+    Process for deinterleaving raw fft data.
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     while 1:
-        LCP = []
-        RCP = []
-
         queue_input = input_queue.get()
 
         if queue_input == None:
@@ -181,14 +180,12 @@ def FFT_deinterleaver(input_queue, output_queue):
         odd2  = (interleaved_window[6::8] + interleaved_window[7::8]*1j)
         RCP   = np.reshape(np.dstack((even2, odd2)), (1,-1))[0]
 
-        #need to figure out here how to write out to the plotting function.
-
         output_queue.put((timestamp, LCP, RCP))
 
     print 'deinterleaver found poison pill'
     output_queue.put(None)
 
-def queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 150):
+def fft_queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 150):
     '''
     Decimates the queue by the specified factor. Passes full data rate out to one queue for recording, and decimated data out to plotting queue.
     '''
@@ -211,71 +208,137 @@ def queue_decimator(input_queue, output_queue, output_decimated_queue, decimatio
     output_queue.put(None)
     output_decimated_queue.put(None)
 
-
-def plotter(input_queue):
+def fft_plotter(input_queue):
     '''
     This process is supposed to handle the graphs.
     Not pretty at the moment... but then matplotlib never is.
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
-    waterfall_size = 150 # This makes it about 75 seconds in theory. Drawing the graph sometimes takes a bit longer.
-    fig = plt.figure(figsize=(20,14))
-    plt.subplots_adjust(left = 0.1, bottom = 0.25)
+    waterfall_size = 150 #
+    fig = plt.figure(figsize=(10,10))
+
     ax = plt.subplot(1, 1, 1)
     line_lcp, = ax.plot([], [], 'b', lw=1)
     line_rcp, = ax.plot([], [], 'r', lw=1)
     ax.set_xlim(0,400)
-    ax.set_ylim(-100,200)
+    ax.set_ylim(-50,200)
+    plt.title('ffts')
+    plt.xlabel('Frequency(MHz)')
 
-    vav_data_lcp = collections.deque(maxlen = waterfall_size)
-    vav_data_rcp = collections.deque(maxlen = waterfall_size)
+    x = np.arange(0, 400, 400.0 / data_width)
+    y = np.zeros(data_width)
+    line_lcp.set_data(x,y)
+    line_rcp.set_data(x,y)
 
-    slider_ax = plt.axes([0.25, 0.1, 0.65, 0.03])
 
-    video_average_length_slider = Slider(slider_ax, 'VAv', 1, waterfall_size, valinit=video_average_length.value)
-    def update(val):
-        video_average_length.value = int(video_average_length_slider.val)
-        fig.canvas.draw_idle()
-    video_average_length_slider.on_changed(update)
+    plt.ion()
+    plt.show()
 
-    def init():
-        x = np.zeros(data_width)
-        y = np.zeros(data_width)
-        line_lcp.set_data(x,y)
-        line_rcp.set_data(x,y)
-        return line_lcp, line_rcp
+    time.sleep(1)
 
-    def animate(*args):
-        if script_run.value != 1 and input_queue.qsize() == 0:
-            sys.exit()
-        x = np.arange(0, 400, 400.0 / data_width)
-        new_lcp, new_rcp = input_queue.get()
-        vav_data_lcp.appendleft(new_lcp)
-        vav_data_rcp.appendleft(new_rcp)
-        lcp = np.zeros(data_width)
-        rcp = np.zeros(data_width)
-        for i in range(video_average_length.value):
-            if i < len(vav_data_lcp):
-                lcp += np.array(vav_data_lcp[i])
-                rcp += np.array(vav_data_rcp[i])
-        lcp /= video_average_length.value
-        rcp /= video_average_length.value
-        graph_max = 10
-        #if lcp.max() > rcp.max():
-        #    graph_max = lcp.max()
-        #else:
-        #    graph_max = rcp.max()
-        #ax.set_ylim(0,graph_max + 1)
-        line_lcp.set_data(x,lcp)
-        line_rcp.set_data(x,rcp)
-        return line_lcp,line_rcp
+    while 1:
+        queue_input = input_queue.get()
+        if queue_input == None:
+            break
+        lcp, rcp = queue_input
+        line_lcp.set_ydata(lcp)
+        line_rcp.set_ydata(rcp)
+        fig.canvas.draw()
 
     # Set the animation off to a start...
-    anim = animation.FuncAnimation(fig, animate, init_func=init, blit=True)
-    plt.show()
     print 'plotter process finished.'
 
+########################################### Stokes functions ########################################################
 
+def stokes_deinterleaver(input_queue, output_queue):
+    '''
+    Process for deinterleaving stokes data.
+    '''
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+    while 1:
+        queue_input = input_queue.get()
+
+        if queue_input == None:
+            break
+
+        timestamp, interleaved_window = queue_input
+        interleaved_window = np.array(interleaved_window)
+
+        I = interleaved_window[0::4]
+        Q = interleaved_window[1::4]
+        U = interleaved_window[2::4]
+        V = interleaved_window[3::4]
+
+        output_queue.put((timestamp, I, Q, U, V))
+
+    print 'deinterleaver found poison pill'
+    output_queue.put(None)
+
+def stokes_queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 150):
+    '''
+    Decimates the queue by the specified factor. Passes full data rate out to one queue for recording, and decimated data out to plotting queue.
+    '''
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+    counter = 0
+    while 1:
+        input_tuple = input_queue.get()
+        if input_tuple == None:
+            break
+        output_queue.put(input_tuple)
+        counter += 1
+        if counter == decimation_factor:
+            counter = 0
+            timestamp, I, Q, U, V = input_tuple
+            output_decimated_queue.put((I,Q,U,V))
+
+    print 'queue decimator received poison pill'
+    output_queue.put(None)
+    output_decimated_queue.put(None)
+
+def stokes_plotter(input_queue):
+    '''
+    This process is supposed to handle the graphs.
+    Not pretty at the moment... but then matplotlib never is.
+    '''
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+    waterfall_size = 150 #
+
+    fig, axI, axQ, axU, axV = plt.subplot(4, sharex=True, figsize=(10,10))
+    line_I, = axI.plot([], [], 'b', lw=1)
+    line_Q, = axQ.plot([], [], 'r', lw=1)
+    line_U, = axU.plot([], [], 'g', lw=1)
+    line_V, = axV.plot([], [], 'y', lw=1)
+
+    plt.title('stokes')
+    plt.xlabel('Frequency(MHz)')
+
+    x = np.arange(0, 400, 400.0 / data_width)
+    y = np.zeros(data_width)
+    line_I.set_data(x,y)
+    line_Q.set_data(x,y)
+    line_U.set_data(x,y)
+    line_V.set_data(x,y)
+
+    plt.ion()
+    plt.show()
+
+    time.sleep(1)
+
+    while 1:
+        queue_input = input_queue.get()
+        if queue_input == None:
+            break
+        I, Q, U, V = queue_input
+        line_I.set_ydata(I)
+        line_Q.set_ydata(Q)
+        line_U.set_ydata(U)
+        line_V.set_ydata(V)
+        fig.canvas.draw()
+
+    # Set the animation off to a start...
+    print 'plotter process finished.'
+
+############################## Dummy and diagnostics ################################
 
 def dummy_queue_emptyer(input_queue):
     '''
@@ -301,10 +364,10 @@ def diagnostic_info(q1, q2, q3, q4, q5):
     else:
         print 'ERROR! Unrecognised data mode!'
 
-    printstr = 'Transmission characteristics:\nPacket size:' + ('%d bytes'%(pkt_len.value)).rjust(10) + \
-               '\nFFT window size:' + ('%d channels'%(fft_win_len.value)).rjust(10) + \
-               '\nSamples per packet:' + ('%d samples'%(pkt_smpl_len.value)).rjust(10) + \
-               '\nPackets per frame:' + ('%d packets'%(frame_len.value)).rjust(10)
+    printstr = 'Transmission characteristics:\nPacket size: ' + ('%d bytes'%(pkt_len.value)).rjust(10) + \
+               '\tFFt window size: ' + ('%d channels'%(fft_win_len.value)).rjust(10) + \
+               '\tSamples per packet: ' + ('%d samples'%(pkt_smpl_len.value)).rjust(10) + \
+               '\tPackets per frame: ' + ('%d packets'%(frame_len.value)).rjust(10)
     print printstr
     diagnose=True
 
@@ -325,6 +388,7 @@ def diagnostic_info(q1, q2, q3, q4, q5):
             diagnose = False
         time.sleep(0.2)
 
+############# main ###################
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, ctrl_c)
@@ -337,15 +401,32 @@ if __name__ == '__main__':
 
     UDP_receiver_process = multiprocessing.Process(name='UDP receiver', target=UDP_receiver, args=(receive_unpack_queue,))
     UDP_unpacker_process = multiprocessing.Process(name='UDP receiver', target=UDP_unpacker, args=(receive_unpack_queue, unpack_deint_queue,))
-    # This is where a decision should be made as to which deinterleaver process to start.
-    deinterleaver_process = multiprocessing.Process(name='deinterleaver', target=FFT_deinterleaver, args=(unpack_deint_queue, deint_decimate_queue))
+
+    UDP_receiver_process.start()
+    UDP_unpacker_process.start()
+
+    while data_mode.value == -1:
+        pass
+
+    if data_mode.value == 0:
+        deinterleaver = fft_deinterleaver
+        queue_decimator = fft_queue_decimator
+        plotter = fft_plotter
+    elif data_mode.value == 1:
+        deinterleaver = stokes_deinterleaver
+        queue_decimator = stokes_queue_decimator
+        plotter = stokes_plotter
+    else:
+        print 'Unrecognised data mode being received in UDP packets. Exiting...'
+        script_run.value = 0
+        sys.exit()
+
+    deinterleaver_process = multiprocessing.Process(name='deinterleaver', target=deinterleaver, args=(unpack_deint_queue, deint_decimate_queue))
     decimator_process = multiprocessing.Process(name='decimator', target=queue_decimator, args=(deint_decimate_queue, storage_queue, plot_queue))
     plot_process = multiprocessing.Process(name='dummy', target=plotter, args=(plot_queue,))
     dummy_storage_process = multiprocessing.Process(name='dummy', target=dummy_queue_emptyer, args=(storage_queue,))
     diagnostics_process = multiprocessing.Process(name='diagnostics', target=diagnostic_info, args=(receive_unpack_queue, unpack_deint_queue, deint_decimate_queue, storage_queue, plot_queue))
 
-    UDP_receiver_process.start()
-    UDP_unpacker_process.start()
     deinterleaver_process.start()
     decimator_process.start()
     plot_process.start()
