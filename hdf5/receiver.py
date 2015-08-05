@@ -1,6 +1,6 @@
 #!/usr/bin/python
 '''
-TBH too lazy to make the docstring at the moment - JNS
+receiver.py - multi-processed script for receiving UDP data from the ROACH via 10GbE, plotting some of it, and storing it in an HDF-5 file.
 '''
 
 import socket
@@ -20,7 +20,18 @@ from matplotlib import pyplot as plt
 from matplotlib import animation
 from matplotlib.widgets import Slider
 
+import h5py
+
 data_width = 1024
+fft_size = float(data_width*2)
+sample_freq = 800e6
+fft_time = fft_size / sample_freq
+accum_len = 3125 # Nice integer number that gives us 8 ms accumulations, and divides evenly into a second.
+accum_time = accum_len * fft_time
+file_time = 10*60 # Ten minutes in seconds
+file_accums = int(file_time / accum_time) # This will be the number of rows in the file
+
+
 
 ###################### Multiprocessing shared values ######################
 script_run = multiprocessing.Value('B', 1) # Boolean to keep track of whether the program shold actually run, initialise to 1
@@ -247,6 +258,46 @@ def fft_plotter(input_queue):
 
     # Set the animation off to a start...
     print 'plotter process finished.'
+
+def fft_hdf5_storage(input_queue):
+    '''
+    Stores FFT data in an hdf5 file directly. This will probably not be used all that much, but will
+    be used in the development phase for making sure that everything is working.
+    '''
+
+    carry_on_regardless = True
+
+    while carry_on_regardless:
+        filename = time.strftime('%Y%m%d_%H%M%S.h5', time.gmtime())
+        print 'Creating file %s'%(filename)
+        h5file = h5py.File( filename, 'w')
+        data_group = h5file.create_group('Data')
+        fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex)
+        ts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        timestamp_array = []
+
+        for i in range(file_accums):
+            input_tuple = input_queue.get()
+            if input_tuple == None:
+                #Some kind of exit routine here. Including closing the h5 file.
+                print 'storage process found poison pill'
+                carry_on_regardless = False
+                h5file.close()
+                break
+            timestamp, l_data, r_data = input_tuple
+            timestamp_array.append(timestamp)
+            fft_dset[0,i,:] = l_data
+            fft_dset[1,i,:] = r_data
+            # TODO After here should come some kind of averaging.
+
+        ts_dset[...] = np.array(timestamp_array)
+        print 'Closing file %s'%(filename)
+        h5file.close()
+
+
+
+
+
 
 ########################################### Stokes functions ########################################################
 

@@ -10,7 +10,7 @@ import numpy as np
 #roach = 'catseye'
 roach = 'catseye'
 katcp_port = 7147
-filename = 'wb_spectrometer_sd_real_2_2015_Jul_30_1406'
+filename = 'wb_spectrometer_sd_real_2_2015_Aug_05_1112'
 accumulation_length = 10 # times by 8 to get the actual length
 
 print 'Connecting...'
