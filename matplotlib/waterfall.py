@@ -1,6 +1,7 @@
 #!/usr/bin/python
 '''
-TBH too lazy to make the docstring at the moment - JNS
+renamed this file
+it's really a plotting test to see if I can get video averaging and waterfalls right
 '''
 import h5py
 import numpy as np
