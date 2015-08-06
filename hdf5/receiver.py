@@ -28,6 +28,7 @@ sample_freq = 800e6
 fft_time = fft_size / sample_freq
 accum_len = 3125 # Nice integer number that gives us 8 ms accumulations, and divides evenly into a second.
 accum_time = accum_len * fft_time
+accums_per_sec = int(1 / accum_time)
 file_time = 10*60 # Ten minutes in seconds
 file_accums = int(file_time / accum_time) # This will be the number of rows in the file
 
@@ -141,31 +142,25 @@ def UDP_unpacker(input_queue, output_queue):
         if data == None:
             break
         magic_no, frame_no, subframe_no, frame_size,  mode = struct.unpack('!IQBBH%dx'%(data_length), data)
-        #log_file.write(' frame_no: %d subframe_no: %d frame_size: %d mode: %d '%(frame_no, subframe_no, frame_size, mode ))
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
         if subframe_no == counter:
             interleaved_window.extend(packet_data)
-            #log_file.write('good pkt - ')
             if len(interleaved_window) < interleaved_window_len:
                 counter += 1
-                #log_file.write('interleaved window length now %d, counter inc to %d\n'%(len(interleaved_window),counter))
             else:
                 counter = 0
                 output_queue.put((frame_no, interleaved_window))
                 interleaved_window = []
                 good_frames.value += 1
                 frame_number.value = frame_no
-                #log_file.write('fin frame %d\n'%(frame_no))
         else:
             counter = 0
             interleaved_window = []
             bad_frames.value += 1
-            #log_file.write('bad pkt\n')
 
     print 'poison pill received by udp unpacker'
     output_queue.put(None)
-    #log_file.close()
 
 ############################### Complex FFT related functions ##############################################
 
@@ -264,7 +259,7 @@ def fft_hdf5_storage(input_queue):
     Stores FFT data in an hdf5 file directly. This will probably not be used all that much, but will
     be used in the development phase for making sure that everything is working.
     '''
-
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     carry_on_regardless = True
 
     while carry_on_regardless:
@@ -274,12 +269,19 @@ def fft_hdf5_storage(input_queue):
         data_group = h5file.create_group('Data')
         fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex)
         ts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
         timestamp_array = []
+        l_average_array = []
+        r_average_array = []
+
+        counter = 0
+        l_average = 0.0
+        r_average = 0.0
 
         for i in range(file_accums):
+            counter += 1
             input_tuple = input_queue.get()
             if input_tuple == None:
-                #Some kind of exit routine here. Including closing the h5 file.
                 print 'storage process found poison pill'
                 carry_on_regardless = False
                 h5file.close()
@@ -288,9 +290,20 @@ def fft_hdf5_storage(input_queue):
             timestamp_array.append(timestamp)
             fft_dset[0,i,:] = l_data
             fft_dset[1,i,:] = r_data
-            # TODO After here should come some kind of averaging.
+            l_average += np.average(np.square(np.abs(l_data)))
+            r_average += np.average(np.square(np.abs(r_data)))
+            if counter == accums_per_sec: # i.e. if we've averaged for a whole second now...
+                l_average /= accums_per_sec
+                r_average /= accums_per_sec
+                l_average_array.append(l_average)
+                r_average_array.append(r_average)
+                counter = 0
+                l_average = 0.0
+                r_average = 0.0
 
-        ts_dset[...] = np.array(timestamp_array)
+        ts_dset[:,0] = np.array(timestamp_array)
+        average_dset[0,:] = np.array(l_average_array)
+        average_dset[1,:] = np.array(r_average_array)
         print 'Closing file %s'%(filename)
         h5file.close()
 
@@ -463,10 +476,12 @@ if __name__ == '__main__':
         deinterleaver = fft_deinterleaver
         queue_decimator = fft_queue_decimator
         plotter = fft_plotter
+        storage = fft_hdf5_storage
     elif data_mode.value == 1:
         deinterleaver = stokes_deinterleaver
         queue_decimator = stokes_queue_decimator
         plotter = stokes_plotter
+        #storage = stokes_hdf5_storage # Not yet implemented...
     else:
         print 'Unrecognised data mode being received in UDP packets. Exiting...'
         script_run.value = 0
@@ -474,14 +489,14 @@ if __name__ == '__main__':
 
     deinterleaver_process = multiprocessing.Process(name='deinterleaver', target=deinterleaver, args=(unpack_deint_queue, deint_decimate_queue))
     decimator_process = multiprocessing.Process(name='decimator', target=queue_decimator, args=(deint_decimate_queue, storage_queue, plot_queue))
-    plot_process = multiprocessing.Process(name='dummy', target=plotter, args=(plot_queue,))
-    dummy_storage_process = multiprocessing.Process(name='dummy', target=dummy_queue_emptyer, args=(storage_queue,))
+    plot_process = multiprocessing.Process(name='plotter', target=plotter, args=(plot_queue,))
+    storage_process = multiprocessing.Process(name='storage', target=storage, args=(storage_queue,))
     diagnostics_process = multiprocessing.Process(name='diagnostics', target=diagnostic_info, args=(receive_unpack_queue, unpack_deint_queue, deint_decimate_queue, storage_queue, plot_queue))
 
     deinterleaver_process.start()
     decimator_process.start()
     plot_process.start()
-    dummy_storage_process.start()
+    storage_process.start()
     diagnostics_process.start()
 
     signal.pause()
@@ -491,7 +506,7 @@ if __name__ == '__main__':
     deinterleaver_process.join()
     decimator_process.join()
     plot_process.join()
-    dummy_storage_process.join()
+    storage_process.join()
     diagnostics_process.join()
 
 
