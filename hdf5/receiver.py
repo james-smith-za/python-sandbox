@@ -23,9 +23,9 @@ from matplotlib.widgets import Slider
 import h5py
 
 data_width = 1024
-fft_size = float(data_width*2)
+fft_size = data_width*2
 sample_freq = 800e6
-fft_time = fft_size / sample_freq
+fft_time = float(fft_size) / sample_freq
 accum_len = 3125 # Nice integer number that gives us 8 ms accumulations, and divides evenly into a second.
 accum_time = accum_len * fft_time
 accums_per_sec = int(1 / accum_time)
@@ -267,7 +267,7 @@ def fft_hdf5_storage(input_queue):
         print 'Creating file %s'%(filename)
         h5file = h5py.File( filename, 'w')
         data_group = h5file.create_group('Data')
-        fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex)
+        fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex64)
         ts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
         average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
         timestamp_array = []
@@ -283,13 +283,27 @@ def fft_hdf5_storage(input_queue):
             input_tuple = input_queue.get()
             if input_tuple == None:
                 print 'storage process found poison pill'
+                # This padding has to be done because the h5 files aren't dynamically sized, so writing an array that's too small into the
+                # dataset breaks things and the file doesn't close properly. This we want to avoid.
+                # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (stretch), but not on 1.6.2 which is on Optimus (wheezy).
+                #ts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
+                #average_dset[0,:] = np.pad(np.array(l_average_array), (0, file_time - len(l_average_array)), 'constant')
+                #average_dset[1,:] = np.pad(np.array(r_average_array), (0, file_time - len(r_average_array)), 'constant')
+
+                # This works but it's less elegant...
+                for k in range(i, file_accums):
+                    timestamp_array.append(0)
+                for k in range(len(l_average_array), file_time):
+                    l_average_array.append(0)
+                    r_average_array.append(0)
+                print 'Closing file %s'%(filename)
                 carry_on_regardless = False
                 h5file.close()
                 break
             timestamp, l_data, r_data = input_tuple
             timestamp_array.append(timestamp)
-            fft_dset[0,i,:] = l_data
-            fft_dset[1,i,:] = r_data
+            fft_dset[0,i,:] = l_data.astype(np.complex64)
+            fft_dset[1,i,:] = r_data.astype(np.complex64)
             l_average += np.average(np.square(np.abs(l_data)))
             r_average += np.average(np.square(np.abs(r_data)))
             if counter == accums_per_sec: # i.e. if we've averaged for a whole second now...
@@ -301,11 +315,12 @@ def fft_hdf5_storage(input_queue):
                 l_average = 0.0
                 r_average = 0.0
 
-        ts_dset[:,0] = np.array(timestamp_array)
-        average_dset[0,:] = np.array(l_average_array)
-        average_dset[1,:] = np.array(r_average_array)
-        print 'Closing file %s'%(filename)
-        h5file.close()
+        if carry_on_regardless:
+            ts_dset[:,0] = np.array(timestamp_array)
+            average_dset[0,:] = np.array(l_average_array)
+            average_dset[1,:] = np.array(r_average_array)
+            print 'Closing file %s'%(filename)
+            h5file.close()
 
 
 
