@@ -206,8 +206,8 @@ def fft_queue_decimator(input_queue, output_queue, output_decimated_queue, decim
         if counter == decimation_factor:
             counter = 0
             timestamp, LCP, RCP = input_tuple
-            LCP_power = 10*np.log10(np.square(np.abs(LCP)) + 1e-10)
-            RCP_power = 10*np.log10(np.square(np.abs(RCP)) + 1e-10)
+            LCP_power = 10*np.log10(np.square(np.abs(LCP)) + 1)
+            RCP_power = 10*np.log10(np.square(np.abs(RCP)) + 1)
             output_decimated_queue.put((LCP_power, RCP_power))
 
     print 'queue decimator received poison pill'
@@ -227,7 +227,7 @@ def fft_plotter(input_queue):
     line_lcp, = ax.plot([], [], 'b', lw=1)
     line_rcp, = ax.plot([], [], 'r', lw=1)
     ax.set_xlim(0,400)
-    ax.set_ylim(-50,200)
+    ax.set_ylim(0,200)
     plt.title('ffts')
     plt.xlabel('Frequency(MHz)')
 
