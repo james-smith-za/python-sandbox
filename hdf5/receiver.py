@@ -32,6 +32,7 @@ accums_per_sec = int(1 / accum_time)
 file_time = 10*60 # Ten minutes in seconds
 file_accums = int(file_time / accum_time) # This will be the number of rows in the file
 
+initial_time = 0
 
 
 ###################### Multiprocessing shared values ######################
@@ -124,7 +125,7 @@ def UDP_unpacker(input_queue, output_queue):
         output_queue.put(None)
         sys.exit()
 
-    data_mode.value = mode
+    data_mode.value = mode & 1 # Extract the LSB.
     pkt_len.value = (packet_length)
     pkt_smpl_len.value = (n_samples)
     frame_len.value = (frame_size)
@@ -142,6 +143,7 @@ def UDP_unpacker(input_queue, output_queue):
         if data == None:
             break
         magic_no, frame_no, subframe_no, frame_size,  mode = struct.unpack('!IQBBH%dx'%(data_length), data)
+        noise_diode = (mode & 0b1000000000000000) >> 15 # noise_diode is on MSB
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
         if subframe_no == counter:
@@ -150,7 +152,7 @@ def UDP_unpacker(input_queue, output_queue):
                 counter += 1
             else:
                 counter = 0
-                output_queue.put((frame_no, interleaved_window))
+                output_queue.put((frame_no, noise_diode, interleaved_window))
                 interleaved_window = []
                 good_frames.value += 1
                 frame_number.value = frame_no
@@ -175,7 +177,7 @@ def fft_deinterleaver(input_queue, output_queue):
         if queue_input == None:
             break
 
-        timestamp, interleaved_window = queue_input
+        timestamp, noise_diode, interleaved_window = queue_input
         interleaved_window = np.array(interleaved_window)
 
         even1 = (interleaved_window[0::8] + interleaved_window[1::8]*1j)
@@ -186,7 +188,7 @@ def fft_deinterleaver(input_queue, output_queue):
         odd2  = (interleaved_window[6::8] + interleaved_window[7::8]*1j)
         RCP   = np.reshape(np.dstack((even2, odd2)), (1,-1))[0]
 
-        output_queue.put((timestamp, LCP, RCP))
+        output_queue.put((timestamp, noise_diode, LCP, RCP))
 
     print 'deinterleaver found poison pill'
     output_queue.put(None)
@@ -205,7 +207,7 @@ def fft_queue_decimator(input_queue, output_queue, output_decimated_queue, decim
         counter += 1
         if counter == decimation_factor:
             counter = 0
-            timestamp, LCP, RCP = input_tuple
+            timestamp, noise_diode, LCP, RCP = input_tuple
             LCP_power = 10*np.log10(np.square(np.abs(LCP)) + 1)
             RCP_power = 10*np.log10(np.square(np.abs(RCP)) + 1)
             output_decimated_queue.put((LCP_power, RCP_power))
@@ -268,9 +270,12 @@ def fft_hdf5_storage(input_queue):
         h5file = h5py.File( filename, 'w')
         data_group = h5file.create_group('Data')
         fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex64)
-        ts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        rts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
         average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
         timestamp_array = []
+        noise_diode_array = []
         l_average_array = []
         r_average_array = []
 
@@ -286,22 +291,29 @@ def fft_hdf5_storage(input_queue):
                 # This padding has to be done because the h5 files aren't dynamically sized, so writing an array that's too small into the
                 # dataset breaks things and the file doesn't close properly. This we want to avoid.
                 # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (stretch), but not on 1.6.2 which is on Optimus (wheezy).
-                #ts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
+                #rts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
                 #average_dset[0,:] = np.pad(np.array(l_average_array), (0, file_time - len(l_average_array)), 'constant')
                 #average_dset[1,:] = np.pad(np.array(r_average_array), (0, file_time - len(r_average_array)), 'constant')
 
                 # This works but it's less elegant...
                 for k in range(i, file_accums):
                     timestamp_array.append(0)
+                    noise_diode_array.append(False)
                 for k in range(len(l_average_array), file_time):
                     l_average_array.append(0)
                     r_average_array.append(0)
                 print 'Closing file %s'%(filename)
                 carry_on_regardless = False
+                rts_dset[:,0] = np.array(timestamp_array)
+                ts_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
+                nd_dset[:,0] = np.array(noise_diode_array)
+                average_dset[0,:] = np.array(l_average_array)
+                average_dset[1,:] = np.array(r_average_array)
                 h5file.close()
                 break
-            timestamp, l_data, r_data = input_tuple
+            timestamp, noise_diode, l_data, r_data = input_tuple
             timestamp_array.append(timestamp)
+            noise_diode_array.append(noise_diode)
             fft_dset[0,i,:] = l_data.astype(np.complex64)
             fft_dset[1,i,:] = r_data.astype(np.complex64)
             l_average += np.average(np.square(np.abs(l_data)))
@@ -316,7 +328,11 @@ def fft_hdf5_storage(input_queue):
                 r_average = 0.0
 
         if carry_on_regardless:
-            ts_dset[:,0] = np.array(timestamp_array)
+            rts_dset[:,0] = np.array(timestamp_array)
+            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
+            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
+            nd_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
+            nd_dset[:,1] = np.array(noise_diode_array)
             average_dset[0,:] = np.array(l_average_array)
             average_dset[1,:] = np.array(r_average_array)
             print 'Closing file %s'%(filename)
@@ -471,6 +487,8 @@ def diagnostic_info(q1, q2, q3, q4, q5):
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, ctrl_c)
+
+    initial_time = int(time.time())
 
     receive_unpack_queue = multiprocessing.Queue()
     unpack_deint_queue = multiprocessing.Queue()
