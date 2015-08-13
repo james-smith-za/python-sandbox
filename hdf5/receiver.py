@@ -343,11 +343,12 @@ def fft_hdf5_storage(input_queue):
 
 
 
-########################################### Stokes functions ########################################################
+########################################### lrqu functions ########################################################
+# This isn't full Stokes - LL, RR, Q and U rather.
 
-def stokes_deinterleaver(input_queue, output_queue):
+def lrqu_deinterleaver(input_queue, output_queue):
     '''
-    Process for deinterleaving stokes data.
+    Process for deinterleaving raw lrqu data.
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     while 1:
@@ -356,20 +357,30 @@ def stokes_deinterleaver(input_queue, output_queue):
         if queue_input == None:
             break
 
-        timestamp, interleaved_window = queue_input
+        timestamp, noise_diode, interleaved_window = queue_input
         interleaved_window = np.array(interleaved_window)
 
-        I = interleaved_window[0::4]
-        Q = interleaved_window[1::4]
-        U = interleaved_window[2::4]
-        V = interleaved_window[3::4]
+        ll_even = interleaved_window[0::8]
+        rr_even = interleaved_window[1::8]
+        Q_even = interleaved_window[2::8]
+        U_even = interleaved_window[3::8]
 
-        output_queue.put((timestamp, I, Q, U, V))
+        ll_odd = interleaved_window[4::8]
+        rr_odd = interleaved_window[5::8]
+        Q_odd = interleaved_window[6::8]
+        U_odd = interleaved_window[7::8]
+
+        ll = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
+        rr = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
+        Q = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
+        U = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
+
+        output_queue.put((timestamp, noise_diode, ll, rr, Q, U))
 
     print 'deinterleaver found poison pill'
     output_queue.put(None)
 
-def stokes_queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 150):
+def lrqu_queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 150):
     '''
     Decimates the queue by the specified factor. Passes full data rate out to one queue for recording, and decimated data out to plotting queue.
     '''
@@ -383,36 +394,40 @@ def stokes_queue_decimator(input_queue, output_queue, output_decimated_queue, de
         counter += 1
         if counter == decimation_factor:
             counter = 0
-            timestamp, I, Q, U, V = input_tuple
-            output_decimated_queue.put((I,Q,U,V))
+            timestamp, noise_diode, ll, rr, Q, U = input_tuple
+            output_decimated_queue.put((ll, rr, Q, U))
 
     print 'queue decimator received poison pill'
     output_queue.put(None)
     output_decimated_queue.put(None)
 
-def stokes_plotter(input_queue):
+def lrqu_plotter(input_queue):
     '''
     This process is supposed to handle the graphs.
     Not pretty at the moment... but then matplotlib never is.
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     waterfall_size = 150 #
+    fig = plt.figure(figsize=(10,10))
 
-    fig, axI, axQ, axU, axV = plt.subplot(4, sharex=True, figsize=(10,10))
-    line_I, = axI.plot([], [], 'b', lw=1)
-    line_Q, = axQ.plot([], [], 'r', lw=1)
-    line_U, = axU.plot([], [], 'g', lw=1)
-    line_V, = axV.plot([], [], 'y', lw=1)
-
-    plt.title('stokes')
+    ax1 = plt.subplot(2, 1, 1)
+    line_ll, = ax1.plot([], [], 'b', lw=1)
+    line_rr, = ax1.plot([], [], 'r', lw=1)
+    ax1.set_xlim(0,400)
+    ax1.set_ylim(0,200)
+    ax2 = plt.subplot(2, 1, 2)
+    line_Q, = ax2.plot([], [], 'v', lw=1)
+    line_U, = ax2.plot([], [], 'g', lw=1)
+     plt.title('lr on top, qu on bottom')
     plt.xlabel('Frequency(MHz)')
 
     x = np.arange(0, 400, 400.0 / data_width)
     y = np.zeros(data_width)
-    line_I.set_data(x,y)
+    line_ll.set_data(x,y)
+    line_rr.set_data(x,y)
     line_Q.set_data(x,y)
     line_U.set_data(x,y)
-    line_V.set_data(x,y)
+
 
     plt.ion()
     plt.show()
@@ -423,15 +438,103 @@ def stokes_plotter(input_queue):
         queue_input = input_queue.get()
         if queue_input == None:
             break
-        I, Q, U, V = queue_input
-        line_I.set_ydata(I)
+        ll,rr,Q,U = queue_input
+        line_ll.set_ydata(ll)
+        line_rr.set_ydata(rr)
         line_Q.set_ydata(Q)
         line_U.set_ydata(U)
-        line_V.set_ydata(V)
+
         fig.canvas.draw()
 
     # Set the animation off to a start...
     print 'plotter process finished.'
+
+def lrqu_hdf5_storage(input_queue):
+    '''
+    Stores lrqu data in an hdf5 file directly. This will probably not be used all that much, but will
+    be used in the development phase for making sure that everything is working.
+    '''
+    signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+    carry_on_regardless = True
+
+    while carry_on_regardless:
+        filename = time.strftime('%Y%m%d_%H%M%S.h5', time.gmtime())
+        print 'Creating file %s'%(filename)
+        h5file = h5py.File( filename, 'w')
+        data_group = h5file.create_group('Data')
+        lrqu_dset = data_group.create_dataset('lrqu data', shape=(4, file_accums, data_width), dtype=np.int32)
+        rts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
+        average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
+        timestamp_array = []
+        noise_diode_array = []
+        l_average_array = []
+        r_average_array = []
+
+        counter = 0
+        l_average = 0.0
+        r_average = 0.0
+
+        for i in range(file_accums):
+            counter += 1
+            input_tuple = input_queue.get()
+            if input_tuple == None:
+                print 'storage process found poison pill'
+                # This padding has to be done because the h5 files aren't dynamically sized, so writing an array that's too small into the
+                # dataset breaks things and the file doesn't close properly. This we want to avoid.
+                # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (stretch), but not on 1.6.2 which is on Optimus (wheezy).
+                #rts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
+                #average_dset[0,:] = np.pad(np.array(l_average_array), (0, file_time - len(l_average_array)), 'constant')
+                #average_dset[1,:] = np.pad(np.array(r_average_array), (0, file_time - len(r_average_array)), 'constant')
+
+                # This works but it's less elegant...
+                for k in range(i, file_accums):
+                    timestamp_array.append(0)
+                    noise_diode_array.append(False)
+                for k in range(len(l_average_array), file_time):
+                    l_average_array.append(0)
+                    r_average_array.append(0)
+                print 'Closing file %s'%(filename)
+                carry_on_regardless = False
+                rts_dset[:,0] = np.array(timestamp_array)
+                ts_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
+                nd_dset[:,0] = np.array(noise_diode_array)
+                average_dset[0,:] = np.array(l_average_array)
+                average_dset[1,:] = np.array(r_average_array)
+                h5file.close()
+                break
+            timestamp, noise_diode, ll, rr, Q, U = input_tuple
+            timestamp_array.append(timestamp)
+            noise_diode_array.append(noise_diode)
+            lrqu_dset[0,i,:] = ll
+            lrqu_dset[1,i,:] = rr
+            lrqu_dset[2,i,:] = Q
+            lrqu_dset[3,i,:] = U
+            l_average += np.average(ll)
+            r_average += np.average(rr)
+            if counter == accums_per_sec: # i.e. if we've averaged for a whole second now...
+                l_average /= accums_per_sec
+                r_average /= accums_per_sec
+                l_average_array.append(l_average)
+                r_average_array.append(r_average)
+                counter = 0
+                l_average = 0.0
+                r_average = 0.0
+
+        if carry_on_regardless:
+            rts_dset[:,0] = np.array(timestamp_array)
+            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
+            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
+            nd_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
+            nd_dset[:,1] = np.array(noise_diode_array)
+            average_dset[0,:] = np.array(l_average_array)
+            average_dset[1,:] = np.array(r_average_array)
+            print 'Closing file %s'%(filename)
+            h5file.close()
+
+
+
 
 ############################## Dummy and diagnostics ################################
 
@@ -511,10 +614,10 @@ if __name__ == '__main__':
         plotter = fft_plotter
         storage = fft_hdf5_storage
     elif data_mode.value == 1:
-        deinterleaver = stokes_deinterleaver
-        queue_decimator = stokes_queue_decimator
-        plotter = stokes_plotter
-        #storage = stokes_hdf5_storage # Not yet implemented...
+        deinterleaver = lrqu_deinterleaver
+        queue_decimator = lrqu_queue_decimator
+        plotter = lrqu_plotter
+        storage = lrqu_hdf5_storage
     else:
         print 'Unrecognised data mode being received in UDP packets. Exiting...'
         script_run.value = 0
