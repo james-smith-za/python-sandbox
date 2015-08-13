@@ -371,9 +371,9 @@ def lrqu_deinterleaver(input_queue, output_queue):
         U_odd = interleaved_window[7::8]
 
         ll = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
-        rr = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
-        Q = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
-        U = np.reshape(np.dstack((ll_even, ll_odd)), (1, -1))[0]
+        rr = np.reshape(np.dstack((rr_even, rr_odd)), (1, -1))[0]
+        Q = np.reshape(np.dstack((Q_even, Q_odd)), (1, -1))[0]
+        U = np.reshape(np.dstack((U_even, U_odd)), (1, -1))[0]
 
         output_queue.put((timestamp, noise_diode, ll, rr, Q, U))
 
@@ -415,10 +415,14 @@ def lrqu_plotter(input_queue):
     line_rr, = ax1.plot([], [], 'r', lw=1)
     ax1.set_xlim(0,400)
     ax1.set_ylim(0,200)
+    plt.title('lr on top')
+
     ax2 = plt.subplot(2, 1, 2)
     line_Q, = ax2.plot([], [], 'v', lw=1)
     line_U, = ax2.plot([], [], 'g', lw=1)
-     plt.title('lr on top, qu on bottom')
+    ax2.set_xlim(0,400)
+    ax2.set_ylim(-200000,200000)
+    plt.title('qu on bottom')
     plt.xlabel('Frequency(MHz)')
 
     x = np.arange(0, 400, 400.0 / data_width)
@@ -462,7 +466,7 @@ def lrqu_hdf5_storage(input_queue):
         print 'Creating file %s'%(filename)
         h5file = h5py.File( filename, 'w')
         data_group = h5file.create_group('Data')
-        lrqu_dset = data_group.create_dataset('lrqu data', shape=(4, file_accums, data_width), dtype=np.int32)
+        lrqu_dset = data_group.create_dataset('lrqu data', shape=(file_accums, data_width, 4), dtype=np.int32)
         rts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
         ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.uint64)
         nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
@@ -507,10 +511,10 @@ def lrqu_hdf5_storage(input_queue):
             timestamp, noise_diode, ll, rr, Q, U = input_tuple
             timestamp_array.append(timestamp)
             noise_diode_array.append(noise_diode)
-            lrqu_dset[0,i,:] = ll
-            lrqu_dset[1,i,:] = rr
-            lrqu_dset[2,i,:] = Q
-            lrqu_dset[3,i,:] = U
+            lrqu_dset[i,:,0] = ll
+            lrqu_dset[i,:,1] = rr
+            lrqu_dset[i,:,2] = Q
+            lrqu_dset[i,:,3] = U
             l_average += np.average(ll)
             r_average += np.average(rr)
             if counter == accums_per_sec: # i.e. if we've averaged for a whole second now...
@@ -607,6 +611,7 @@ if __name__ == '__main__':
 
     while data_mode.value == -1:
         pass
+
 
     if data_mode.value == 0:
         deinterleaver = fft_deinterleaver
