@@ -395,6 +395,12 @@ def lrqu_queue_decimator(input_queue, output_queue, output_decimated_queue, deci
         if counter == decimation_factor:
             counter = 0
             timestamp, noise_diode, ll, rr, Q, U = input_tuple
+            ll = 10*np.log10(ll + 1)
+            rr = 10*np.log10(rr + 1)
+            Q = np.divide(Q, (ll + rr))
+            U = np.divide(U, (ll + rr))
+            #Q = np.copysign(10*np.log10(np.abs(Q) + 1), Q)
+            #U = np.copysign(10*np.log10(np.abs(U) + 1), U)
             output_decimated_queue.put((ll, rr, Q, U))
 
     print 'queue decimator received poison pill'
@@ -414,14 +420,15 @@ def lrqu_plotter(input_queue):
     line_ll, = ax1.plot([], [], 'b', lw=1)
     line_rr, = ax1.plot([], [], 'r', lw=1)
     ax1.set_xlim(0,400)
-    ax1.set_ylim(0,200)
+    ax1.set_ylim(0,100)
     plt.title('lr on top')
+    plt.xlabel('Frequency(MHz)')
 
     ax2 = plt.subplot(2, 1, 2)
-    line_Q, = ax2.plot([], [], 'v', lw=1)
+    line_Q, = ax2.plot([], [], 'b', lw=1)
     line_U, = ax2.plot([], [], 'g', lw=1)
     ax2.set_xlim(0,400)
-    ax2.set_ylim(-200000,200000)
+    ax2.set_ylim(-100,100)
     plt.title('qu on bottom')
     plt.xlabel('Frequency(MHz)')
 
@@ -611,7 +618,6 @@ if __name__ == '__main__':
 
     while data_mode.value == -1:
         pass
-
 
     if data_mode.value == 0:
         deinterleaver = fft_deinterleaver
