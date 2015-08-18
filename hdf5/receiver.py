@@ -271,7 +271,7 @@ def fft_hdf5_storage(input_queue):
         data_group = h5file.create_group('Data')
         fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex64)
         rts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
-        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.uint64)
+        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.float)
         nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
         average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
         timestamp_array = []
@@ -329,7 +329,6 @@ def fft_hdf5_storage(input_queue):
 
         if carry_on_regardless:
             rts_dset[:,0] = np.array(timestamp_array)
-            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
             ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
             nd_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
             nd_dset[:,1] = np.array(noise_diode_array)
