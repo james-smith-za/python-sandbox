@@ -394,11 +394,11 @@ def lrqu_queue_decimator(input_queue, output_queue, output_decimated_queue, deci
         counter += 1
         if counter == decimation_factor:
             counter = 0
-            timestamp, noise_diode, ll, rr, Q, U = input_tuple
-            ll = 10*np.log10(ll + 1)
-            rr = 10*np.log10(rr + 1)
-            Q = np.divide(Q, (ll + rr))
-            U = np.divide(U, (ll + rr))
+            timestamp, noise_diode, LL, RR, Q, U = input_tuple
+            ll = 10*np.log10(LL + 1)
+            rr = 10*np.log10(RR + 1)
+            Q = np.divide(Q.astype(np.float), (LL + RR))
+            U = np.divide(U.astype(np.float), (LL + RR))
             #Q = np.copysign(10*np.log10(np.abs(Q) + 1), Q)
             #U = np.copysign(10*np.log10(np.abs(U) + 1), U)
             output_decimated_queue.put((ll, rr, Q, U))
@@ -428,7 +428,7 @@ def lrqu_plotter(input_queue):
     line_Q, = ax2.plot([], [], 'b', lw=1)
     line_U, = ax2.plot([], [], 'g', lw=1)
     ax2.set_xlim(0,400)
-    ax2.set_ylim(-100,100)
+    ax2.set_ylim(-1, 1)
     plt.title('qu on bottom')
     plt.xlabel('Frequency(MHz)')
 
@@ -537,8 +537,7 @@ def lrqu_hdf5_storage(input_queue):
             rts_dset[:,0] = np.array(timestamp_array)
             ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
             ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
-            nd_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
-            nd_dset[:,1] = np.array(noise_diode_array)
+            nd_dset[:,0] = np.array(noise_diode_array)
             average_dset[0,:] = np.array(l_average_array)
             average_dset[1,:] = np.array(r_average_array)
             print 'Closing file %s'%(filename)
