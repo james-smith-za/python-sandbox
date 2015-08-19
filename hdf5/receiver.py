@@ -1,6 +1,6 @@
 #!/usr/bin/python
 '''
-receiver.py - multi-processed script for receiving UDP data from the ROACH via 10GbE, plotting some of it, and storing it in an HDF-5 file.
+WB.py - multi-processed script for receiving UDP data from the ROACH via 10GbE, plotting some of it, and storing it in an HDF-5 file.
 '''
 
 import socket
@@ -17,11 +17,10 @@ import collections
 import matplotlib
 matplotlib.use('gtkagg') # Necessary on optimus for some reason - older version of matplotlib.
 from matplotlib import pyplot as plt
-from matplotlib import animation
-from matplotlib.widgets import Slider
 
 import h5py
 
+# TODO This bit will need to be adapted for the narrowband spectrometer. I have an idea of how to do that but haven't implemented yet...
 data_width = 1024
 fft_size = data_width*2
 sample_freq = 800e6
@@ -32,7 +31,7 @@ accums_per_sec = int(1 / accum_time)
 file_time = 10*60 # Ten minutes in seconds
 file_accums = int(file_time / accum_time) # This will be the number of rows in the file
 
-initial_time = 0
+initial_time = 0 # This just needs to exist for the time being, will be assigned a value later.
 
 
 ###################### Multiprocessing shared values ######################
@@ -45,13 +44,12 @@ fft_win_len = multiprocessing.Value('H', 0)
 pkt_smpl_len = multiprocessing.Value('H', 0)
 frame_len = multiprocessing.Value('H', 0)
 
+initial_time = multiprocessing.Value('Q', 0)
+
+# Diagnostic information
 frame_number = multiprocessing.Value('L', 0)
 good_frames = multiprocessing.Value('L', 0)
 bad_frames = multiprocessing.Value('L', 0)
-
-
-video_average_length = multiprocessing.Value('B', 1) # This is a bit of a hack, but it seems to work fine...
-
 
 ###################### Signal handler functions ######################
 def ctrl_c(signal, frame):
@@ -62,6 +60,7 @@ def ctrl_c(signal, frame):
     # Though now I'm thinking about it, going to have to figure out some way to tell the script
     # when to stop _other_ than sitting in front of the keyboard to press ctrl+c at the right
     # time...
+    # This can come in release 2.0 perhaps
     print '\n##################### Ctrl+C pressed, exiting sanely...#####################\n'
     script_run.value = 0
 
@@ -73,7 +72,7 @@ def UDP_receiver(output_queue):
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
 
-
+    # This necessary so that the receiver has enough priority to get the packets in.
     udp_process_priority = -19
     time.sleep(0.2) # Just to give the other processes time to print their messages so this doesn't get lost
     command_string = 'sudo renice ' + str(udp_process_priority) + ' ' + str(os.getpid())
@@ -90,7 +89,7 @@ def UDP_receiver(output_queue):
     print 'Bound to UDP socket', local_interface, ':', local_port
 
     while script_run.value == 1:
-        data, addr = sock.recvfrom(1040) # Sufficiently large that it can handle a big enough packet
+        data, addr = sock.recvfrom(10240) # Sufficiently large that it can handle a big enough packet
         output_queue.put(data)
 
     output_queue.put(None)
@@ -102,8 +101,6 @@ def UDP_unpacker(input_queue, output_queue):
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     counter = 0 # Packets start with zero (hopefully)
-
-    #log_file = open('udp_logfile', 'w')
 
     header_length = 16
     data = input_queue.get()
@@ -117,21 +114,20 @@ def UDP_unpacker(input_queue, output_queue):
     magic_no, frame_no, subframe_no, frame_size,  mode = struct.unpack('!IQBBH%dx'%(data_length), data)
     packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
-    #log_file.write(' frame_no: %d subframe_no: %d frame_size: %d mode: %d '%(frame_no, subframe_no, frame_size, mode ))
-    #frame_size = 16 # REMEMBER TO REMOVE ONCE HARDCODED STUFF IS REMOVED!!
-
     if magic_no != 439041101:
         print 'Magic number unexpected value %d'%(magic_no)
         output_queue.put(None)
         sys.exit()
 
-    data_mode.value = mode & 1 # Extract the LSB.
+    # TODO This needs to be adapted to be more dynamic i.t.o. wideband or narrowband.
+    data_mode.value = mode & 1 # LSB is FFT / Stokes mode.
     pkt_len.value = (packet_length)
     pkt_smpl_len.value = (n_samples)
     frame_len.value = (frame_size)
     fft_win_len.value = (frame_size*n_samples)
     interleaved_window_len = (data_length*frame_size) / 4 # /4 to take into account that there are 4 bytes per element
-    #interleaved_window_len = 4096
+
+    initial_time.value = int(time.time()) - int(frame_no / 125) # This rolls the "initial time" back to a more accuratei measure of when the ROACH was started.
 
     counter += 1 # can't forget this, otherwise we miss the first frame (if we happen to catch the first packet, which is usually the case)
 
@@ -146,7 +142,7 @@ def UDP_unpacker(input_queue, output_queue):
         noise_diode = (mode & 0b1000000000000000) >> 15 # noise_diode is on MSB
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
-        if subframe_no == counter:
+        if subframe_no == counter: # i.e. are the packets coming in synchronously with the incremented counter.
             interleaved_window.extend(packet_data)
             if len(interleaved_window) < interleaved_window_len:
                 counter += 1
@@ -156,7 +152,7 @@ def UDP_unpacker(input_queue, output_queue):
                 interleaved_window = []
                 good_frames.value += 1
                 frame_number.value = frame_no
-        else:
+        else: # If not, just reset everything until you get a 0 again. Start from the beginning of the next frame.
             counter = 0
             interleaved_window = []
             bad_frames.value += 1
@@ -208,7 +204,7 @@ def fft_queue_decimator(input_queue, output_queue, output_decimated_queue, decim
         if counter == decimation_factor:
             counter = 0
             timestamp, noise_diode, LCP, RCP = input_tuple
-            LCP_power = 10*np.log10(np.square(np.abs(LCP)) + 1)
+            LCP_power = 10*np.log10(np.square(np.abs(LCP)) + 1) # The +1 is to avoid NaN if you log zero.
             RCP_power = 10*np.log10(np.square(np.abs(RCP)) + 1)
             output_decimated_queue.put((LCP_power, RCP_power))
 
@@ -218,11 +214,9 @@ def fft_queue_decimator(input_queue, output_queue, output_decimated_queue, decim
 
 def fft_plotter(input_queue):
     '''
-    This process is supposed to handle the graphs.
-    Not pretty at the moment... but then matplotlib never is.
+    Plots the decimated spectrum
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
-    waterfall_size = 150 #
     fig = plt.figure(figsize=(10,10))
 
     ax = plt.subplot(1, 1, 1)
@@ -230,7 +224,7 @@ def fft_plotter(input_queue):
     line_rcp, = ax.plot([], [], 'r', lw=1)
     ax.set_xlim(0,400)
     ax.set_ylim(0,200)
-    plt.title('ffts')
+    plt.title('LL is blue, RR is red')
     plt.xlabel('Frequency(MHz)')
 
     x = np.arange(0, 400, 400.0 / data_width)
@@ -238,11 +232,8 @@ def fft_plotter(input_queue):
     line_lcp.set_data(x,y)
     line_rcp.set_data(x,y)
 
-
     plt.ion()
     plt.show()
-
-    time.sleep(1)
 
     while 1:
         queue_input = input_queue.get()
@@ -253,7 +244,6 @@ def fft_plotter(input_queue):
         line_rcp.set_ydata(rcp)
         fig.canvas.draw()
 
-    # Set the animation off to a start...
     print 'plotter process finished.'
 
 def fft_hdf5_storage(input_queue):
@@ -288,14 +278,14 @@ def fft_hdf5_storage(input_queue):
             input_tuple = input_queue.get()
             if input_tuple == None:
                 print 'storage process found poison pill'
-                # This padding has to be done because the h5 files aren't dynamically sized, so writing an array that's too small into the
-                # dataset breaks things and the file doesn't close properly. This we want to avoid.
-                # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (stretch), but not on 1.6.2 which is on Optimus (wheezy).
+                # Padding has to be done because the h5 files aren't dynamically sized, so writing an array that's too small into the
+                # dataset breaks things and the file doesn't close properly. This we want to avoidi, because it becomes unusable.
+                # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (Mint Rebecca), but not on 1.6.2 which is on Optimus (Debian Wheezy).
+                # The code below works, but it's much less elegant (IMO).
                 #rts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
                 #average_dset[0,:] = np.pad(np.array(l_average_array), (0, file_time - len(l_average_array)), 'constant')
                 #average_dset[1,:] = np.pad(np.array(r_average_array), (0, file_time - len(r_average_array)), 'constant')
 
-                # This works but it's less elegant...
                 for k in range(i, file_accums):
                     timestamp_array.append(0)
                     noise_diode_array.append(False)
@@ -339,11 +329,9 @@ def fft_hdf5_storage(input_queue):
 
 
 
-
-
-
 ########################################### lrqu functions ########################################################
 # This isn't full Stokes - LL, RR, Q and U rather.
+# Essentially a repeat of the above functions adapted.
 
 def lrqu_deinterleaver(input_queue, output_queue):
     '''
@@ -396,10 +384,8 @@ def lrqu_queue_decimator(input_queue, output_queue, output_decimated_queue, deci
             timestamp, noise_diode, LL, RR, Q, U = input_tuple
             ll = 10*np.log10(LL + 1)
             rr = 10*np.log10(RR + 1)
-            Q = np.divide(Q.astype(np.float), (LL + RR))
+            Q = np.divide(Q.astype(np.float), (LL + RR)) # Give Q and U as a fraction of total power.
             U = np.divide(U.astype(np.float), (LL + RR))
-            #Q = np.copysign(10*np.log10(np.abs(Q) + 1), Q)
-            #U = np.copysign(10*np.log10(np.abs(U) + 1), U)
             output_decimated_queue.put((ll, rr, Q, U))
 
     print 'queue decimator received poison pill'
@@ -408,11 +394,9 @@ def lrqu_queue_decimator(input_queue, output_queue, output_decimated_queue, deci
 
 def lrqu_plotter(input_queue):
     '''
-    This process is supposed to handle the graphs.
-    Not pretty at the moment... but then matplotlib never is.
+    Plots decimated Stokes data. Top graph ends up effectively the same as the plot from the FFT (above), but the bottom one shows Q and U.
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
-    waterfall_size = 150 #
     fig = plt.figure(figsize=(10,10))
 
     ax1 = plt.subplot(2, 1, 1)
@@ -420,7 +404,7 @@ def lrqu_plotter(input_queue):
     line_rr, = ax1.plot([], [], 'r', lw=1)
     ax1.set_xlim(0,400)
     ax1.set_ylim(0,100)
-    plt.title('lr on top')
+    plt.title('LL blue, RR red') # Apologies if there are any colour-bind operators. Perhaps in a future version, circles / squares / triangles can also be used.
     plt.xlabel('Frequency(MHz)')
 
     ax2 = plt.subplot(2, 1, 2)
@@ -428,7 +412,7 @@ def lrqu_plotter(input_queue):
     line_U, = ax2.plot([], [], 'g', lw=1)
     ax2.set_xlim(0,400)
     ax2.set_ylim(-1, 1)
-    plt.title('qu on bottom')
+    plt.title('Q blue, U green')
     plt.xlabel('Frequency(MHz)')
 
     x = np.arange(0, 400, 400.0 / data_width)
@@ -438,11 +422,8 @@ def lrqu_plotter(input_queue):
     line_Q.set_data(x,y)
     line_U.set_data(x,y)
 
-
     plt.ion()
     plt.show()
-
-    time.sleep(1)
 
     while 1:
         queue_input = input_queue.get()
@@ -456,7 +437,6 @@ def lrqu_plotter(input_queue):
 
         fig.canvas.draw()
 
-    # Set the animation off to a start...
     print 'plotter process finished.'
 
 def lrqu_hdf5_storage(input_queue):
@@ -491,14 +471,7 @@ def lrqu_hdf5_storage(input_queue):
             input_tuple = input_queue.get()
             if input_tuple == None:
                 print 'storage process found poison pill'
-                # This padding has to be done because the h5 files aren't dynamically sized, so writing an array that's too small into the
-                # dataset breaks things and the file doesn't close properly. This we want to avoid.
-                # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (stretch), but not on 1.6.2 which is on Optimus (wheezy).
-                #rts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
-                #average_dset[0,:] = np.pad(np.array(l_average_array), (0, file_time - len(l_average_array)), 'constant')
-                #average_dset[1,:] = np.pad(np.array(r_average_array), (0, file_time - len(r_average_array)), 'constant')
-
-                # This works but it's less elegant...
+                # Same here as in the previous storage function, padding arrays to h5 size.
                 for k in range(i, file_accums):
                     timestamp_array.append(0)
                     noise_diode_array.append(False)
@@ -559,6 +532,10 @@ def dummy_queue_emptyer(input_queue):
 
 
 def diagnostic_info(q1, q2, q3, q4, q5):
+    '''
+    Diagnostic information - prints and re-prints a line with queue lengths after initially
+    informing the user various relevant details about the data being received.
+    '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     print 'PID: ', os.getpid()
     print 'Waiting for first packet...'
@@ -600,7 +577,7 @@ def diagnostic_info(q1, q2, q3, q4, q5):
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, ctrl_c)
 
-    initial_time = int(time.time())
+    initial_time.value = int(time.time())
 
     receive_unpack_queue = multiprocessing.Queue()
     unpack_deint_queue = multiprocessing.Queue()
