@@ -31,8 +31,6 @@ accums_per_sec = int(1 / accum_time)
 file_time = 10*60 # Ten minutes in seconds
 file_accums = int(file_time / accum_time) # This will be the number of rows in the file
 
-initial_time = 0 # This just needs to exist for the time being, will be assigned a value later.
-
 
 ###################### Multiprocessing shared values ######################
 script_run = multiprocessing.Value('B', 1) # Boolean to keep track of whether the program shold actually run, initialise to 1
@@ -43,8 +41,6 @@ pkt_len = multiprocessing.Value('H', 0)
 fft_win_len = multiprocessing.Value('H', 0)
 pkt_smpl_len = multiprocessing.Value('H', 0)
 frame_len = multiprocessing.Value('H', 0)
-
-initial_time = multiprocessing.Value('Q', 0)
 
 # Diagnostic information
 frame_number = multiprocessing.Value('L', 0)
@@ -111,7 +107,7 @@ def UDP_unpacker(input_queue, output_queue):
     packet_length = len(data)
     data_length = packet_length - header_length
     n_samples = data_length / 4
-    magic_no, frame_no, subframe_no, frame_size,  mode = struct.unpack('!IQBBH%dx'%(data_length), data)
+    magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IqBBH%dx'%(data_length), data)
     packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
     if magic_no != 439041101:
@@ -127,8 +123,6 @@ def UDP_unpacker(input_queue, output_queue):
     fft_win_len.value = (frame_size*n_samples)
     interleaved_window_len = (data_length*frame_size) / 4 # /4 to take into account that there are 4 bytes per element
 
-    initial_time.value = int(time.time()) - int(frame_no / 125) # This rolls the "initial time" back to a more accuratei measure of when the ROACH was started.
-
     counter += 1 # can't forget this, otherwise we miss the first frame (if we happen to catch the first packet, which is usually the case)
 
     interleaved_window = []
@@ -138,7 +132,7 @@ def UDP_unpacker(input_queue, output_queue):
         data = input_queue.get()
         if data == None:
             break
-        magic_no, frame_no, subframe_no, frame_size,  mode = struct.unpack('!IQBBH%dx'%(data_length), data)
+        magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IqBBH%dx'%(data_length), data)
         noise_diode = (mode & 0b1000000000000000) >> 15 # noise_diode is on MSB
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
@@ -148,10 +142,10 @@ def UDP_unpacker(input_queue, output_queue):
                 counter += 1
             else:
                 counter = 0
-                output_queue.put((frame_no, noise_diode, interleaved_window))
+                output_queue.put((timestamp, noise_diode, interleaved_window))
                 interleaved_window = []
                 good_frames.value += 1
-                frame_number.value = frame_no
+                frame_number.value = timestamp
         else: # If not, just reset everything until you get a 0 again. Start from the beginning of the next frame.
             counter = 0
             interleaved_window = []
@@ -260,7 +254,6 @@ def fft_hdf5_storage(input_queue):
         h5file = h5py.File( filename, 'w')
         data_group = h5file.create_group('Data')
         fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex64)
-        rts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
         ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.float)
         nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
         average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
@@ -282,7 +275,7 @@ def fft_hdf5_storage(input_queue):
                 # dataset breaks things and the file doesn't close properly. This we want to avoidi, because it becomes unusable.
                 # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (Mint Rebecca), but not on 1.6.2 which is on Optimus (Debian Wheezy).
                 # The code below works, but it's much less elegant (IMO).
-                #rts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
+                #ts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
                 #average_dset[0,:] = np.pad(np.array(l_average_array), (0, file_time - len(l_average_array)), 'constant')
                 #average_dset[1,:] = np.pad(np.array(r_average_array), (0, file_time - len(r_average_array)), 'constant')
 
@@ -294,8 +287,7 @@ def fft_hdf5_storage(input_queue):
                     r_average_array.append(0)
                 print 'Closing file %s'%(filename)
                 carry_on_regardless = False
-                rts_dset[:,0] = np.array(timestamp_array)
-                ts_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
+                ts_dset[:,0] = np.array(timestamp_array)
                 nd_dset[:,0] = np.array(noise_diode_array)
                 average_dset[0,:] = np.array(l_average_array)
                 average_dset[1,:] = np.array(r_average_array)
@@ -318,10 +310,8 @@ def fft_hdf5_storage(input_queue):
                 r_average = 0.0
 
         if carry_on_regardless:
-            rts_dset[:,0] = np.array(timestamp_array)
-            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
-            nd_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
-            nd_dset[:,1] = np.array(noise_diode_array)
+            ts_dset[:,0] = np.array(timestamp_array)
+            nd_dset[:,0] = np.array(noise_diode_array)
             average_dset[0,:] = np.array(l_average_array)
             average_dset[1,:] = np.array(r_average_array)
             print 'Closing file %s'%(filename)
@@ -453,7 +443,6 @@ def lrqu_hdf5_storage(input_queue):
         h5file = h5py.File( filename, 'w')
         data_group = h5file.create_group('Data')
         lrqu_dset = data_group.create_dataset('lrqu data', shape=(file_accums, data_width, 4), dtype=np.int32)
-        rts_dset = data_group.create_dataset('Raw timestamps', shape=(file_accums, 1), dtype=np.uint64)
         ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.uint64)
         nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
         average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
@@ -480,8 +469,7 @@ def lrqu_hdf5_storage(input_queue):
                     r_average_array.append(0)
                 print 'Closing file %s'%(filename)
                 carry_on_regardless = False
-                rts_dset[:,0] = np.array(timestamp_array)
-                ts_dset[:,0] = np.array(timestamp_array)*0.008 + initial_time
+                ts_dset[:,0] = np.array(timestamp_array)
                 nd_dset[:,0] = np.array(noise_diode_array)
                 average_dset[0,:] = np.array(l_average_array)
                 average_dset[1,:] = np.array(r_average_array)
@@ -506,9 +494,7 @@ def lrqu_hdf5_storage(input_queue):
                 r_average = 0.0
 
         if carry_on_regardless:
-            rts_dset[:,0] = np.array(timestamp_array)
-            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
-            ts_dset[:,0] = np.array(timestamp_array).astype(np.float)*0.008 + initial_time
+            ts_dset[:,0] = np.array(timestamp_array)
             nd_dset[:,0] = np.array(noise_diode_array)
             average_dset[0,:] = np.array(l_average_array)
             average_dset[1,:] = np.array(r_average_array)
@@ -576,8 +562,6 @@ def diagnostic_info(q1, q2, q3, q4, q5):
 
 if __name__ == '__main__':
     signal.signal(signal.SIGINT, ctrl_c)
-
-    initial_time.value = int(time.time())
 
     receive_unpack_queue = multiprocessing.Queue()
     unpack_deint_queue = multiprocessing.Queue()
