@@ -132,7 +132,7 @@ def UDP_unpacker(input_queue, output_queue):
         data = input_queue.get()
         if data == None:
             break
-        magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IqBBH%dx'%(data_length), data)
+        magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IQBBH%dx'%(data_length), data)
         noise_diode = (mode & 0b1000000000000000) >> 15 # noise_diode is on MSB
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
