@@ -98,6 +98,8 @@ def UDP_unpacker(input_queue, output_queue):
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
     counter = 0 # Packets start with zero (hopefully)
 
+    #logfile = open('logfile.csv', 'w')
+
     header_length = 16
     data = input_queue.get()
     if data == None:
@@ -108,6 +110,12 @@ def UDP_unpacker(input_queue, output_queue):
     data_length = packet_length - header_length
     n_samples = data_length / 4
     magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IqBBH%dx'%(data_length), data)
+    #logstr = str(magic_no) + ',' + \
+    #         str(timestamp).zfill(20) + ',' + \
+    #         str(subframe_no).zfill(3) + ',' + \
+    #         str(frame_size).zfill(3) + ',' + \
+    #         str(mode).zfill(3) + '\n'
+    #logfile.write(logstr)
     packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
     if magic_no != 439041101:
@@ -133,6 +141,12 @@ def UDP_unpacker(input_queue, output_queue):
         if data == None:
             break
         magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IqBBH%dx'%(data_length), data)
+        #logstr = str(magic_no) + ',' + \
+        #         str(timestamp).zfill(20) + ',' + \
+        #         str(subframe_no).zfill(3) + ',' + \
+        #         str(frame_size).zfill(3) + ',' + \
+        #         str(mode).zfill(3) + '\n'
+        #logfile.write(logstr)
         noise_diode = (mode & 0b1000000000000000) >> 15 # noise_diode is on MSB
         packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
 
@@ -140,19 +154,23 @@ def UDP_unpacker(input_queue, output_queue):
             interleaved_window.extend(packet_data)
             if len(interleaved_window) < interleaved_window_len:
                 counter += 1
+                #logfile.write('Good packet\n')
             else:
                 counter = 0
                 output_queue.put((timestamp, noise_diode, interleaved_window))
                 interleaved_window = []
                 good_frames.value += 1
                 frame_number.value = timestamp
+                #logfile.write('Good frame\n')
         else: # If not, just reset everything until you get a 0 again. Start from the beginning of the next frame.
             counter = 0
             interleaved_window = []
             bad_frames.value += 1
+            #logfile.write('Bad frame\n')
 
     print 'poison pill received by udp unpacker'
     output_queue.put(None)
+    #logfile.close()
 
 ############################### Complex FFT related functions ##############################################
 
