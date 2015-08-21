@@ -43,7 +43,8 @@ pkt_smpl_len = multiprocessing.Value('H', 0)
 frame_len = multiprocessing.Value('H', 0)
 
 # Diagnostic information
-frame_number = multiprocessing.Value('L', 0)
+frame_number_MSB = multiprocessing.Value('L', 0)
+frame_number_LSB = multiprocessing.Value('L', 0)
 good_frames = multiprocessing.Value('L', 0)
 bad_frames = multiprocessing.Value('L', 0)
 
@@ -131,10 +132,15 @@ def UDP_unpacker(input_queue, output_queue):
     fft_win_len.value = (frame_size*n_samples)
     interleaved_window_len = (data_length*frame_size) / 4 # /4 to take into account that there are 4 bytes per element
 
-    counter += 1 # can't forget this, otherwise we miss the first frame (if we happen to catch the first packet, which is usually the case)
-
     interleaved_window = []
-    interleaved_window.extend(packet_data)
+
+    if subframe_no == 0:
+        counter += 1 # can't forget this, otherwise we miss the first frame (if we happen to catch the first packet, which is usually the case)
+        interleaved_window.extend(packet_data)
+
+    else:
+        for i in range(subframe_no + 1, frame_size):
+            input_queue.get()
 
     while 1:
         data = input_queue.get()
@@ -160,7 +166,7 @@ def UDP_unpacker(input_queue, output_queue):
                 output_queue.put((timestamp, noise_diode, interleaved_window))
                 interleaved_window = []
                 good_frames.value += 1
-                frame_number.value = timestamp
+                frame_number_MSB.value, frame_number_LSB.value = struct.unpack('LL', struct.pack('q', timestamp))
                 #logfile.write('Good frame\n')
         else: # If not, just reset everything until you get a 0 again. Start from the beginning of the next frame.
             counter = 0
@@ -560,8 +566,9 @@ def diagnostic_info(q1, q2, q3, q4, q5):
     diagnose=True
 
     while diagnose or q1.qsize() > 0 or q2.qsize() > 0 or q3.qsize() > 0 or q4.qsize() > 0 or q5.qsize() > 0:
+        timestamp = struct.unpack('q', struct.pack('LL', frame_number_MSB.value, frame_number_LSB.value))[0]
         printstr = '\r' + str(diagnose) + \
-                   '| Frame number:' + ('%d'%(frame_number.value)).rjust(12) +\
+                   '| Frame no:' + ('%d'%(timestamp)).rjust(18) +\
                    '| Good frames:' + ('%d'%(good_frames.value)).rjust(12) +\
                    '| Bad frames:' + ('%d'%(bad_frames.value)).rjust(12) +\
                    '| Q1 length:' + ('%d'%(q1.qsize())).rjust(12) +\
@@ -569,7 +576,7 @@ def diagnostic_info(q1, q2, q3, q4, q5):
                    '| Q3 length:' + ('%d'%(q3.qsize())).rjust(12) +\
                    '| Q4 length:' + ('%d'%(q4.qsize())).rjust(12) +\
                    '| Q5 length:' + ('%d'%(q5.qsize())).rjust(12) +\
-                   '| Frame drop percentage: %f'%(float(bad_frames.value) / (good_frames.value + bad_frames.value + 1) * 100)
+                   '| Frame drop percentage: %.2f'%(float(bad_frames.value) / (good_frames.value + bad_frames.value + 1) * 100)
         sys.stdout.write(printstr)
         sys.stdout.flush()
         if script_run.value == 0:
