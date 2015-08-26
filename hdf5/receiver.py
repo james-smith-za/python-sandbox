@@ -3,6 +3,10 @@
 WB.py - multi-processed script for receiving UDP data from the ROACH via 10GbE, plotting some of it, and storing it in an HDF-5 file.
 '''
 
+# TODO:
+# - consolidate craig's software and mine
+# - make it a bit more clever i.t.o. selecting which modes.
+
 import socket
 import struct
 import multiprocessing
@@ -137,7 +141,6 @@ def UDP_unpacker(input_queue, output_queue):
     if subframe_no == 0:
         counter += 1 # can't forget this, otherwise we miss the first frame (if we happen to catch the first packet, which is usually the case)
         interleaved_window.extend(packet_data)
-
     else:
         for i in range(subframe_no + 1, frame_size):
             input_queue.get()
