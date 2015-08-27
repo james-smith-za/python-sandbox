@@ -4,8 +4,7 @@ WB.py - multi-processed script for receiving UDP data from the ROACH via 10GbE, 
 '''
 
 # TODO:
-# - consolidate craig's software and mine
-# - make it a bit more clever i.t.o. selecting which modes.
+# - Figure out the accumulation length from the difference in timestamps.
 
 import socket
 import struct
@@ -24,22 +23,18 @@ from matplotlib import pyplot as plt
 
 import h5py
 
-# TODO This bit will need to be adapted for the narrowband spectrometer. I have an idea of how to do that but haven't implemented yet...
-data_width = 1024
-fft_size = data_width*2
-sample_freq = 800e6
-fft_time = float(fft_size) / sample_freq
-accum_len = 3125 # Nice integer number that gives us 8 ms accumulations, and divides evenly into a second.
-accum_time = accum_len * fft_time
-accums_per_sec = int(1 / accum_time)
-file_time = 10*60 # Ten minutes in seconds
-file_accums = int(file_time / accum_time) # This will be the number of rows in the file
-
 
 ###################### Multiprocessing shared values ######################
 script_run = multiprocessing.Value('B', 1) # Boolean to keep track of whether the program shold actually run, initialise to 1
 
-data_mode = multiprocessing.Value('h', -1) # Signed short so that I can use a -1 until such time as the right mode comes through
+data_mode = multiprocessing.Value('h', -1) # 0 for complex FFT, 1 for Stokes
+band_mode = multiprocessing.Value('h', -1) # 0 for wideband, 1 for narrowband
+
+sample_freq = 800e6
+fft_size = multiprocessing.Value('H', 0)
+data_width = multiprocessing.Value('H', 0)
+file_time = 10*60 # This is just a constant, doesn't need to be edited after the fact
+file_accums = multiprocessing.Value('H', 0)
 
 pkt_len = multiprocessing.Value('H', 0)
 fft_win_len = multiprocessing.Value('H', 0)
@@ -113,28 +108,30 @@ def UDP_unpacker(input_queue, output_queue):
         sys.exit()
     packet_length = len(data)
     data_length = packet_length - header_length
-    n_samples = data_length / 4
+    n_samples = data_length / 16
     magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IqBBH%dx'%(data_length), data)
-    #logstr = str(magic_no) + ',' + \
-    #         str(timestamp).zfill(20) + ',' + \
-    #         str(subframe_no).zfill(3) + ',' + \
-    #         str(frame_size).zfill(3) + ',' + \
-    #         str(mode).zfill(3) + '\n'
+    logstr = str(magic_no) + ',' + \
+             str(timestamp).zfill(20) + ',' + \
+             str(subframe_no).zfill(3) + ',' + \
+             str(frame_size).zfill(3) + ',' + \
+             str(mode).zfill(3) + '\n'
     #logfile.write(logstr)
-    packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
+    packet_data = struct.unpack('!%dx%di'%(header_length, n_samples*4), data)
 
     if magic_no != 439041101:
         print 'Magic number unexpected value %d'%(magic_no)
         output_queue.put(None)
         sys.exit()
 
-    # TODO This needs to be adapted to be more dynamic i.t.o. wideband or narrowband.
     data_mode.value = mode & 1 # LSB is FFT / Stokes mode.
+    band_mode.value = ((mode & 2) >> 1) # Second-to-last bit is wide / narrowband mode
     pkt_len.value = (packet_length)
     pkt_smpl_len.value = (n_samples)
     frame_len.value = (frame_size)
     fft_win_len.value = (frame_size*n_samples)
     interleaved_window_len = (data_length*frame_size) / 4 # /4 to take into account that there are 4 bytes per element
+
+    print
 
     interleaved_window = []
 
@@ -150,14 +147,14 @@ def UDP_unpacker(input_queue, output_queue):
         if data == None:
             break
         magic_no, timestamp, subframe_no, frame_size,  mode = struct.unpack('!IqBBH%dx'%(data_length), data)
-        #logstr = str(magic_no) + ',' + \
-        #         str(timestamp).zfill(20) + ',' + \
-        #         str(subframe_no).zfill(3) + ',' + \
-        #         str(frame_size).zfill(3) + ',' + \
-        #         str(mode).zfill(3) + '\n'
+        logstr = str(magic_no) + ',' + \
+                 str(timestamp).zfill(20) + ',' + \
+                 str(subframe_no).zfill(3) + ',' + \
+                 str(frame_size).zfill(3) + ',' + \
+                 str(mode).zfill(3) + '\n'
         #logfile.write(logstr)
         noise_diode = (mode & 0b1000000000000000) >> 15 # noise_diode is on MSB
-        packet_data = struct.unpack('!%dx%di'%(header_length, n_samples), data)
+        packet_data = struct.unpack('!%dx%di'%(header_length, n_samples*4), data)
 
         if subframe_no == counter: # i.e. are the packets coming in synchronously with the incremented counter.
             interleaved_window.extend(packet_data)
@@ -248,8 +245,17 @@ def fft_plotter(input_queue):
     plt.title('LL is blue, RR is red')
     plt.xlabel('Frequency(MHz)')
 
-    x = np.arange(0, 400, 400.0 / data_width)
-    y = np.zeros(data_width)
+    x = []
+
+    if band_mode.value == 0:
+        x = np.arange(0, 400, 400.0 / data_width.value)
+        ax1.set_xlim(0,400)
+        ax2.set_xlim(0,400)
+    elif band_mode.value == 1:
+        x = np.arange(0, 1.5625, 1.5625 / data_width.value)
+        ax1.set_xlim(0,1.5625)
+        ax2.set_xlim(0,1.5625)
+
     line_lcp.set_data(x,y)
     line_rcp.set_data(x,y)
 
@@ -280,9 +286,9 @@ def fft_hdf5_storage(input_queue):
         print 'Creating file %s'%(filename)
         h5file = h5py.File( filename, 'w')
         data_group = h5file.create_group('Data')
-        fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums, data_width), dtype=np.complex64)
-        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.float)
-        nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
+        fft_dset = data_group.create_dataset('Complex FFT data', shape=(2, file_accums.value, data_width.value), dtype=np.complex64)
+        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums.value, 1), dtype=np.float)
+        nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums.value, 1), dtype=np.uint64)
         average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
         timestamp_array = []
         noise_diode_array = []
@@ -293,7 +299,7 @@ def fft_hdf5_storage(input_queue):
         l_average = 0.0
         r_average = 0.0
 
-        for i in range(file_accums):
+        for i in range(file_accums.value):
             counter += 1
             input_tuple = input_queue.get()
             if input_tuple == None:
@@ -302,11 +308,11 @@ def fft_hdf5_storage(input_queue):
                 # dataset breaks things and the file doesn't close properly. This we want to avoidi, because it becomes unusable.
                 # I'm leaving these lines in - they work in numpy 1.8.2 which is on my laptop (Mint Rebecca), but not on 1.6.2 which is on Optimus (Debian Wheezy).
                 # The code below works, but it's much less elegant (IMO).
-                #ts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums - len(timestamp_array)), 'constant')
+                #ts_dset[:,0] = np.pad(np.array(timestamp_array), (0, file_accums.value - len(timestamp_array)), 'constant')
                 #average_dset[0,:] = np.pad(np.array(l_average_array), (0, file_time - len(l_average_array)), 'constant')
                 #average_dset[1,:] = np.pad(np.array(r_average_array), (0, file_time - len(r_average_array)), 'constant')
 
-                for k in range(i, file_accums):
+                for k in range(i, file_accums.value):
                     timestamp_array.append(0)
                     noise_diode_array.append(False)
                 for k in range(len(l_average_array), file_time):
@@ -384,11 +390,19 @@ def lrqu_deinterleaver(input_queue, output_queue):
     print 'deinterleaver found poison pill'
     output_queue.put(None)
 
-def lrqu_queue_decimator(input_queue, output_queue, output_decimated_queue, decimation_factor = 150):
+def lrqu_queue_decimator(input_queue, output_queue, output_decimated_queue):
     '''
     Decimates the queue by the specified factor. Passes full data rate out to one queue for recording, and decimated data out to plotting queue.
     '''
     signal.signal(signal.SIGINT, signal.SIG_IGN) # Ignore keyboard interrupt signal, parent process will handle.
+
+    decimation_factor = 0
+
+    if band_mode.value == 0:
+        decimation_factor = 150
+    elif band_mode.value == 1:
+        decimation_factor = 1
+
     counter = 0
     while 1:
         input_tuple = input_queue.get()
@@ -419,7 +433,6 @@ def lrqu_plotter(input_queue):
     ax1 = plt.subplot(2, 1, 1)
     line_ll, = ax1.plot([], [], 'b', lw=1)
     line_rr, = ax1.plot([], [], 'r', lw=1)
-    ax1.set_xlim(0,400)
     ax1.set_ylim(0,100)
     plt.title('LL blue, RR red') # Apologies if there are any colour-bind operators. Perhaps in a future version, circles / squares / triangles can also be used.
     plt.xlabel('Frequency(MHz)')
@@ -427,13 +440,22 @@ def lrqu_plotter(input_queue):
     ax2 = plt.subplot(2, 1, 2)
     line_Q, = ax2.plot([], [], 'b', lw=1)
     line_U, = ax2.plot([], [], 'g', lw=1)
-    ax2.set_xlim(0,400)
     ax2.set_ylim(-1, 1)
     plt.title('Q blue, U green')
     plt.xlabel('Frequency(MHz)')
 
-    x = np.arange(0, 400, 400.0 / data_width)
-    y = np.zeros(data_width)
+    x = []
+
+    if band_mode.value == 0:
+        x = np.arange(0, 400, 400.0 / data_width.value)
+        ax1.set_xlim(0,400)
+        ax2.set_xlim(0,400)
+    elif band_mode.value == 1:
+        x = np.arange(0, 1.5625, 1.5625 / data_width.value)
+        ax1.set_xlim(0,1.5625)
+        ax2.set_xlim(0,1.5625)
+
+    y = np.zeros(data_width.value)
     line_ll.set_data(x,y)
     line_rr.set_data(x,y)
     line_Q.set_data(x,y)
@@ -469,9 +491,9 @@ def lrqu_hdf5_storage(input_queue):
         print 'Creating file %s'%(filename)
         h5file = h5py.File( filename, 'w')
         data_group = h5file.create_group('Data')
-        lrqu_dset = data_group.create_dataset('lrqu data', shape=(file_accums, data_width, 4), dtype=np.int32)
-        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums, 1), dtype=np.uint64)
-        nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums, 1), dtype=np.uint64)
+        lrqu_dset = data_group.create_dataset('lrqu data', shape=(file_accums.value, data_width.value, 4), dtype=np.int32)
+        ts_dset = data_group.create_dataset('Timestamps', shape=(file_accums.value, 1), dtype=np.uint64)
+        nd_dset = data_group.create_dataset('Noise Diode', shape=(file_accums.value, 1), dtype=np.uint64)
         average_dset = data_group.create_dataset('Time-averages', shape=(2, file_time), dtype=np.float)
         timestamp_array = []
         noise_diode_array = []
@@ -482,13 +504,13 @@ def lrqu_hdf5_storage(input_queue):
         l_average = 0.0
         r_average = 0.0
 
-        for i in range(file_accums):
+        for i in range(file_accums.value):
             counter += 1
             input_tuple = input_queue.get()
             if input_tuple == None:
                 print 'storage process found poison pill'
                 # Same here as in the previous storage function, padding arrays to h5 size.
-                for k in range(i, file_accums):
+                for k in range(i, file_accums.value):
                     timestamp_array.append(0)
                     noise_diode_array.append(False)
                 for k in range(len(l_average_array), file_time):
@@ -562,9 +584,9 @@ def diagnostic_info(q1, q2, q3, q4, q5):
         print 'ERROR! Unrecognised data mode!'
 
     printstr = 'Transmission characteristics:\nPacket size: ' + ('%d bytes'%(pkt_len.value)).rjust(10) + \
-               '\tFFt window size: ' + ('%d channels'%(fft_win_len.value)).rjust(10) + \
-               '\tSamples per packet: ' + ('%d samples'%(pkt_smpl_len.value)).rjust(10) + \
-               '\tPackets per frame: ' + ('%d packets'%(frame_len.value)).rjust(10)
+               '\nFFT window size: ' + ('%d channels'%(fft_win_len.value)).rjust(10) + \
+               '\nSamples per packet: ' + ('%d samples'%(pkt_smpl_len.value)).rjust(10) + \
+               '\nPackets per frame: ' + ('%d packets'%(frame_len.value)).rjust(10)
     print printstr
     diagnose=True
 
@@ -616,10 +638,23 @@ if __name__ == '__main__':
         queue_decimator = lrqu_queue_decimator
         plotter = lrqu_plotter
         storage = lrqu_hdf5_storage
-    else:
-        print 'Unrecognised data mode being received in UDP packets. Exiting...'
-        script_run.value = 0
-        sys.exit()
+
+    if band_mode.value == 0:
+        print 'Wideband mode'
+        data_width.value = 1024
+        fft_size.value = data_width.value*2
+        fft_time = float(fft_size.value) / sample_freq
+        accum_len = 3125 # Nice integer number that gives us 8 ms accumulations, and divides evenly into a second.
+    elif band_mode.value == 1:
+        print 'Narrowband mode'
+        data_width.value = 4096
+        fft_size = data_width.value # Not *2 because the second stage has a complex input - no symmetry
+        fft_time = float(fft_size) / sample_freq * 2048
+        accum_len = 128 # TODO: This still needs to be standardised.
+
+    accum_time = accum_len * fft_time
+    accums_per_sec = int(1 / accum_time)
+    file_accums.value = int(file_time / accum_time) # This will be the number of rows in the file
 
     deinterleaver_process = multiprocessing.Process(name='deinterleaver', target=deinterleaver, args=(unpack_deint_queue, deint_decimate_queue))
     decimator_process = multiprocessing.Process(name='decimator', target=queue_decimator, args=(deint_decimate_queue, storage_queue, plot_queue))
