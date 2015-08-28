@@ -2,7 +2,7 @@
 
 # Form implementation generated from reading ui file 'roachWindow.ui'
 #
-# Created: Wed Aug 26 15:33:07 2015
+# Created: Fri Aug 28 09:21:50 2015
 #      by: PyQt4 UI code generator 4.10.4
 #
 # WARNING! All changes made in this file will be lost!
@@ -380,6 +380,20 @@ class Ui_MainWindow(object):
         self._connectToRoachButton.setEnabled(True)
         self._connectToRoachButton.setGeometry(QtCore.QRect(430, 20, 231, 91))
         self._connectToRoachButton.setObjectName(_fromUtf8("_connectToRoachButton"))
+        self._manualResyncButton = QtGui.QPushButton(self.centralwidget)
+        self._manualResyncButton.setEnabled(False)
+        self._manualResyncButton.setGeometry(QtCore.QRect(480, 620, 231, 91))
+        self._manualResyncButton.setObjectName(_fromUtf8("_manualResyncButton"))
+        self._initRoachButton_2 = QtGui.QPushButton(self.centralwidget)
+        self._initRoachButton_2.setEnabled(False)
+        self._initRoachButton_2.setGeometry(QtCore.QRect(60, 1220, 391, 91))
+        self._initRoachButton_2.setObjectName(_fromUtf8("_initRoachButton_2"))
+        self.label_27 = QtGui.QLabel(self.centralwidget)
+        self.label_27.setGeometry(QtCore.QRect(460, 570, 121, 16))
+        self.label_27.setObjectName(_fromUtf8("label_27"))
+        self._timeLabel = QtGui.QLabel(self.centralwidget)
+        self._timeLabel.setGeometry(QtCore.QRect(460, 590, 151, 16))
+        self._timeLabel.setObjectName(_fromUtf8("_timeLabel"))
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QtGui.QMenuBar(MainWindow)
         self.menubar.setGeometry(QtCore.QRect(0, 0, 750, 20))
@@ -395,7 +409,7 @@ class Ui_MainWindow(object):
 
     def retranslateUi(self, MainWindow):
         MainWindow.setWindowTitle(_translate("MainWindow", "AVN ROACH Control", None))
-        self._initRoachButton.setText(_translate("MainWindow", "Initialise ROACH with above settings", None))
+        self._initRoachButton.setText(_translate("MainWindow", "Initialise ROACH and sync next PPS", None))
         self.label_14.setText(_translate("MainWindow", "Indicators:", None))
         self.label_33.setText(_translate("MainWindow", "10Gbe Status", None))
         self._tenGbEStatusLabel.setText(_translate("MainWindow", "--", None))
@@ -451,4 +465,8 @@ class Ui_MainWindow(object):
         self.label_26.setText(_translate("MainWindow", "Gateware:", None))
         self.label_24.setText(_translate("MainWindow", "ROACH IP / Hostname:", None))
         self._connectToRoachButton.setText(_translate("MainWindow", "Connect to ROACH", None))
+        self._manualResyncButton.setText(_translate("MainWindow", "Manual resync", None))
+        self._initRoachButton_2.setText(_translate("MainWindow", "Initialise ROACH and sync next PPS", None))
+        self.label_27.setText(_translate("MainWindow", "Current UNIX time:", None))
+        self._timeLabel.setText(_translate("MainWindow", "time", None))
 

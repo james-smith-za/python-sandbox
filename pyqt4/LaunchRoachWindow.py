@@ -43,10 +43,12 @@ class roachWin(QtGui.QMainWindow):
             self.fpga = casperfpga.katcp_fpga.KatcpFpga(roachIP, katcpPort)
         except casperfpga.katcp_fpga.KatcpRequestError:
             QtGui.QMessageBox.about(self, 'Error', 'Could not connect to ROACH %s'%(roachIP))
+        else:
+            self.ui._initRoachButton.setEnabled(True)
 
     def initialiseRoach(self):
         # An if statement will need to be here to determine which gateware to use.
-        gateware = 'wb_spectrometer_11_2015_Aug_24_1502'
+        gateware = 'wb_spectrometer_11_2015_Aug_27_1506'
         self.fpga.system_info['program_filename'] = '%s.bof'%(gateware)
         try:
             self.fpga.program()
@@ -84,8 +86,8 @@ class roachWin(QtGui.QMainWindow):
         destinationIP = struct.unpack('!L', packedDestinationIP)[0]
         destinationPort = self.ui._destinationPortSpinbox.value()
         try:
-            self.fpga.registers.tgbe0_dest_ip.write(reg = tGbEDestinationIP)
-            self.fpga.registers.tgbe0_dest_port.write(reg = tGbEDestinationPort)
+            self.fpga.registers.tgbe0_dest_ip.write(reg = destinationIP)
+            self.fpga.registers.tgbe0_dest_port.write(reg = destinationPort)
         except casperfpga.katcp_fpga.KatcpRequestError:
             QtGui.QMessageBox.about(self, 'Error', 'Unable to write 10GbE information to ROACH')
 
@@ -93,8 +95,8 @@ class roachWin(QtGui.QMainWindow):
     def updatePackets(self):
         dataSizePerPacket_B = self.ui._dataSizePerPacketSpinbox.value()
         interpacketLength_cycles = self.ui._interpacketLengthSpinbox.value()
-        packetsPerWindow_n = self.fftWindowSize * self.dataUnitSize / dataSizePerPacket
-        self.ui._packetsPerWindowLabel.setText(str(packetsPerWindow))
+        packetsPerWindow_n = self.fftWindowSize * self.dataUnitSize / dataSizePerPacket_B
+        self.ui._packetsPerWindowLabel.setText(str(packetsPerWindow_n))
         try:
             self.fpga.registers.eth_data_size_per_packet.write_int(dataSizePerPacket_B)
             self.fpga.registers.eth_interpacket_length.write_int(interpacketLength_cycles)
@@ -118,10 +120,10 @@ class roachWin(QtGui.QMainWindow):
         NDHighTime = self.ui._NDHighTimeSpinbox.value()
         NDLowTime = self.ui._NDLowTimeSpinbox.value()
         try:
-            fpga.registers.noise_diode_on_length.write_int(NDHighTime)
-            fpga.registers.noise_diode_off_length.write_int(NDLowTime)
-            fpga.registers.noise_diode_duty_cycle_en.write_int(int(NDDutyCycleMode))
-            fpga.registers.noise_diode_en.write_int(int(NDEnable))
+            self.fpga.registers.noise_diode_on_length.write_int(NDHighTime)
+            self.fpga.registers.noise_diode_off_length.write_int(NDLowTime)
+            self.fpga.registers.noise_diode_duty_cycle_en.write_int(int(NDDutyCycleMode))
+            self.fpga.registers.noise_diode_en.write_int(int(NDEnable))
         except casperfpga.katcp_fpga.KatcpRequestError:
             QtGui.QMessageBox.about(self, 'Error', 'Unable to write noise diode information to ROACH')
 
@@ -136,6 +138,7 @@ class roachWin(QtGui.QMainWindow):
     def updateIndicators(self):
         if self.pollRegisters:
             self.ui._tenGbEStatusLabel.setText(str(bool(self.fpga.read_int('tgbe0_linkup'))))
+
             self.ui._adc0OrLabel.setText(str(bool(random.randint(0,1))))
             self.ui._adc1OrLabel.setText(str(bool(random.randint(0,1))))
             self.ui._fft0OfLabel.setText(str(bool(random.randint(0,1))))

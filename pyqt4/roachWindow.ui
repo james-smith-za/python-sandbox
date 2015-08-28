@@ -27,7 +27,7 @@
      </rect>
     </property>
     <property name="text">
-     <string>Initialise ROACH with above settings</string>
+     <string>Initialise ROACH and sync next PPS</string>
     </property>
    </widget>
    <widget class="QLabel" name="label_14">
@@ -764,6 +764,64 @@
     </property>
     <property name="text">
      <string>Connect to ROACH</string>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="_manualResyncButton">
+    <property name="enabled">
+     <bool>false</bool>
+    </property>
+    <property name="geometry">
+     <rect>
+      <x>480</x>
+      <y>620</y>
+      <width>231</width>
+      <height>91</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Manual resync</string>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="_initRoachButton_2">
+    <property name="enabled">
+     <bool>false</bool>
+    </property>
+    <property name="geometry">
+     <rect>
+      <x>60</x>
+      <y>1220</y>
+      <width>391</width>
+      <height>91</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Initialise ROACH and sync next PPS</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_27">
+    <property name="geometry">
+     <rect>
+      <x>460</x>
+      <y>570</y>
+      <width>121</width>
+      <height>16</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Current UNIX time:</string>
+    </property>
+   </widget>
+   <widget class="QLabel" name="_timeLabel">
+    <property name="geometry">
+     <rect>
+      <x>460</x>
+      <y>590</y>
+      <width>151</width>
+      <height>16</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>time</string>
     </property>
    </widget>
   </widget>
