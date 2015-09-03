@@ -12,6 +12,8 @@ class james_class:
         self.proc1 = multiprocessing.Process(name="stage1", target=self.pipeline_stage_1)
         self.proc2 = multiprocessing.Process(name="stage2", target=self.pipeline_stage_2)
 
+        self.status = multiprocessing.Value('H', 0)
+
         time.sleep(1)
 
         self.proc1.start()
@@ -25,6 +27,8 @@ class james_class:
         for i in range(0, 20):
             print "Pipeline stage 1 putting %d on the queue."%(i)
             self.interprocess_queue.put(i)
+            print "ps1 writing %d to status value"%(i)
+            self.status.value = i
             time.sleep(2)
         print "Pipeline stage 1 putting poison pill on the queue."
         self.interprocess_queue.put(None)
@@ -33,6 +37,7 @@ class james_class:
         print "Pipeline stage 2 starting."
         for queue_output in iter(self.interprocess_queue.get, None):
             print "Pipeline stage 2 got %s from the queue."%(str(queue_output))
+            print "self.status: %d"%self.status.value
         print "Pipeline stage 2 received poison pill."
 
 if __name__ == "__main__":
