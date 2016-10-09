@@ -1,7 +1,7 @@
 import zipfile
 import xml.etree.ElementTree as ElementTree
 
-BoMEpub = BoMEpub = zipfile.ZipFile("book-of-mormon-eng.epub")
+BoMEpub = zipfile.ZipFile("book-of-mormon-eng.epub")
 
 # This is the standard TOC for an epub. The unzipper can give a list of files,
 # but it'll list them alphabetically, which won't necessarily be in the right
