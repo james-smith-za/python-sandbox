@@ -188,7 +188,11 @@ antenna_pos_dataset_list = ["pos.actual-dec",
                             "pos.actual-scan-azim",
                             "pos.actual-scan-elev",
                             "pos.request-scan-azim",
-                            "pos.request-scan-elev"]
+                            "pos.request-scan-elev",
+                            "pos.actual-pointm-azim",
+                            "pos.actual-pointm-elev",
+                            "pos.request-pointm-azim",
+                            "pos.request-pointm-elev"]
 
 for dset_name in antenna_pos_dataset_list:
     try:
@@ -227,7 +231,7 @@ try:
     csv_lower_index -= 1 # Set it back to just before the RF data starts.
     print "\nLower bound: %d."%(csv_lower_index)
     print "CSV lower index: %.2f\tH5file lower index: %.2f"%(csv_file["Timestamp"][csv_lower_index]/1000, begin_time)
-    print "Difference: %.2f"%(np.abs(csv_file["Timestamp"][csv_lower_index] / 1000 - begin_time))
+    print "Position data commences %.2f seconds before start of RF data."%(np.abs(csv_file["Timestamp"][csv_lower_index] / 1000 - begin_time))
 except ValueError:
     print "There are funny lines in the CSV file. They might be somewhere around line %d."%(csv_lower_index)
 
@@ -239,13 +243,75 @@ try:
     csv_upper_index += 1 # Set it back to just after the RF data ends.
     print "\nUpper bound: %d."%(csv_upper_index)
     print "CSV upper index: %.2f\tH5file upper index: %.2f"%(csv_file["Timestamp"][csv_upper_index]/1000, end_time)
-    print "Difference: %.2f"%(np.abs(csv_file["Timestamp"][csv_upper_index] / 1000 - end_time))
+    print "Position data extens to %.2f seconds after RF data."%(np.abs(csv_file["Timestamp"][csv_upper_index] / 1000 - end_time))
 except ValueError:
-    print "There are funny lines in the CSV file. They might be somewhere around line %d."%(csv_upper_index)
+    print "There is a fault in the CSV file. It might be somewhere around line %d."%(csv_upper_index)
 
+# What remains to do is to have the relevant data in numpy arrays ready for the splicing into the HDF5 file.
 
+timestamp_array = np.array(csv_file["Timestamp"][csv_lower_index:csv_upper_index], dtype=[("timestamp","<f8")])
 
+# Unfortunately no elegant way to do this really... as far as I can tell.
+azim_req_pos_dset     = []
+azim_desired_pos_dset = []
+azim_actual_pos_dset  = []
+elev_req_pos_dset     = []
+elev_desired_pos_dset = []
+elev_actual_pos_dset  = []
 
+antenna_sensor_group = sensor_group["Antennas/ant1"]
+
+# If not for the attributes required in each thing, this whole thing could just be done with a for loop and a dictionary...
+# Status message just 'nominal' for the moment. Until such time as there are some parameters where it should be otherwise.
+for i in range(len(timestamp_array)):
+    azim_req_pos_dset.append((csv_file["Timestamp"][csv_lower_index + i], csv_file["Azim req position"][csv_lower_index + i], "nominal"))
+    azim_desired_pos_dset.append((csv_file["Timestamp"][csv_lower_index + i], csv_file["Azim desired position"][csv_lower_index + i], "nominal"))
+    azim_actual_pos_dset.append((csv_file["Timestamp"][csv_lower_index + i], csv_file["Azim actual position"][csv_lower_index + i], "nominal"))
+    elev_req_pos_dset.append((csv_file["Timestamp"][csv_lower_index + i], csv_file["Elev req position"][csv_lower_index + i], "nominal"))
+    elev_desired_pos_dset.append((csv_file["Timestamp"][csv_lower_index + i], csv_file["Elev desired position"][csv_lower_index + i], "nominal"))
+    elev_actual_pos_dset.append((csv_file["Timestamp"][csv_lower_index + i], csv_file["Elev actual position"][csv_lower_index + i], "nominal"))
+
+azim_req_pos_dset = np.array(azim_req_pos_dset, dtype=[('timestamp','<f8'),('value', '<f8'),('status', 'S7')])
+antenna_sensor_group.create_dataset("pos.request-pointm-azim", data=azim_req_pos_dset)
+antenna_sensor_group["pos.request-pointm-azim"].attrs["description"] = "Requested (by user or Field System) azimuth position."
+antenna_sensor_group["pos.request-pointm-azim"].attrs["name"] = "pos.request-pointm-azim"
+antenna_sensor_group["pos.request-pointm-azim"].attrs["type"] = "float64"
+antenna_sensor_group["pos.request-pointm-azim"].attrs["units"] = "degrees CW from N"
+
+azim_desired_pos_dset = np.array(azim_desired_pos_dset, dtype=[('timestamp','<f8'),('value', '<f8'),('status', 'S7')])
+antenna_sensor_group.create_dataset("pos.desired-pointm-azim", data=azim_req_pos_dset)
+antenna_sensor_group["pos.desired-pointm-azim"].attrs["description"] = "Intermediate azimuth position setpoint used by the ASCS."
+antenna_sensor_group["pos.desired-pointm-azim"].attrs["name"] = "pos.desired-pointm-azim"
+antenna_sensor_group["pos.desired-pointm-azim"].attrs["type"] = "float64"
+antenna_sensor_group["pos.desired-pointm-azim"].attrs["units"] = "degrees CW from N"
+
+azim_actual_pos_dset = np.array(azim_actual_pos_dset, dtype=[('timestamp','<f8'),('value', '<f8'),('status', 'S7')])
+antenna_sensor_group.create_dataset("pos.actual-pointm-azim", data=azim_req_pos_dset)
+antenna_sensor_group["pos.actual-pointm-azim"].attrs["description"] = "Azimuth data returned by the encoder."
+antenna_sensor_group["pos.actual-pointm-azim"].attrs["name"] = "pos.actual-pointm-azim"
+antenna_sensor_group["pos.actual-pointm-azim"].attrs["type"] = "float64"
+antenna_sensor_group["pos.actual-pointm-azim"].attrs["units"] = "degrees CW from N"
+
+elev_req_pos_dset = np.array(elev_req_pos_dset, dtype=[('timestamp','<f8'),('value', '<f8'),('status', 'S7')])
+antenna_sensor_group.create_dataset("pos.request-pointm-elev", data=elev_req_pos_dset)
+antenna_sensor_group["pos.request-pointm-elev"].attrs["description"] = "Requested (by user or Field System) elevation position."
+antenna_sensor_group["pos.request-pointm-elev"].attrs["name"] = "pos.request-pointm-elev"
+antenna_sensor_group["pos.request-pointm-elev"].attrs["type"] = "float64"
+antenna_sensor_group["pos.request-pointm-elev"].attrs["units"] = "degrees CW from N"
+
+elev_desired_pos_dset = np.array(elev_desired_pos_dset, dtype=[('timestamp','<f8'),('value', '<f8'),('status', 'S7')])
+antenna_sensor_group.create_dataset("pos.desired-pointm-elev", data=elev_req_pos_dset)
+antenna_sensor_group["pos.desired-pointm-elev"].attrs["description"] = "Intermediate elevation position setpoint used by the ASCS."
+antenna_sensor_group["pos.desired-pointm-elev"].attrs["name"] = "pos.desired-pointm-elev"
+antenna_sensor_group["pos.desired-pointm-elev"].attrs["type"] = "float64"
+antenna_sensor_group["pos.desired-pointm-elev"].attrs["units"] = "degrees CW from N"
+
+elev_actual_pos_dset = np.array(elev_actual_pos_dset, dtype=[('timestamp','<f8'),('value', '<f8'),('status', 'S7')])
+antenna_sensor_group.create_dataset("pos.actual-pointm-elev", data=elev_req_pos_dset)
+antenna_sensor_group["pos.actual-pointm-elev"].attrs["description"] = "Elevation data returned by the encoder."
+antenna_sensor_group["pos.actual-pointm-elev"].attrs["name"] = "pos.actual-pointm-elev"
+antenna_sensor_group["pos.actual-pointm-elev"].attrs["type"] = "float64"
+antenna_sensor_group["pos.actual-pointm-elev"].attrs["units"] = "degrees CW from N"
 
 h5file.close()
 
