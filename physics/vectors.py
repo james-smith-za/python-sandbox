@@ -34,7 +34,14 @@ class vector(object):
     
     @property
     def direction(self):
-        if self.x >= 0 and self.y >= 0:
+        if self.x == 0:
+            if self.y > 0:
+                return np.pi / 2
+            elif self.y < 0:
+                return np.pi * 3 / 2
+            else:
+                return 0.0
+        if self.x > 0 and self.y >= 0:
             return np.arctan(np.abs(self.y) / np.abs(self.x))
         elif self.x < 0 and self.y >= 0:
             return np.pi - np.arctan(np.abs(self.y) / np.abs(self.x))
