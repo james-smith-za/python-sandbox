@@ -1,4 +1,5 @@
 import numpy as np
+pi = 3.141592653589793238462643383279502884197169399375105820974944592307816406286208998628034825342117067982148086513
 
 class vector(object):
     def __init__(self, input_var):
@@ -44,11 +45,11 @@ class vector(object):
         if self.x > 0 and self.y >= 0:
             return np.arctan(np.abs(self.y) / np.abs(self.x))
         elif self.x < 0 and self.y >= 0:
-            return np.pi - np.arctan(np.abs(self.y) / np.abs(self.x))
+            return pi - np.arctan(np.abs(self.y) / np.abs(self.x))
         elif self.x < 0 and self.y < 0:
-            return np.pi + np.arctan(np.abs(self.y) / np.abs(self.x))
+            return pi + np.arctan(np.abs(self.y) / np.abs(self.x))
         else:
-            return 2*np.pi - np.arctan(np.abs(self.y) / np.abs(self.x))
+            return 2*pi - np.arctan(np.abs(self.y) / np.abs(self.x))
     
 def vector_dot(vector1, vector2):
     """Returns an inner (dot) product of two vectors.
