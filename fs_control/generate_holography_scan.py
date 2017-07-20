@@ -5,8 +5,10 @@ import time
 import katpoint
 from optparse import OptionParser
 
-def generate_raster(total_extent_az, total_extent_el, az_resolution=0.05, el_resolution=0.05, dwell_time=10, n_slew_points=5, slew_speed=0.02, scan_speed = 0.01):
 
+
+def generate_raster(total_extent_az, total_extent_el, az_resolution=0.05, el_resolution=0.05, dwell_time=10,
+                    n_slew_points=5, slew_speed=0.02, scan_speed=0.01):
     total_extent_az = float(total_extent_az)
     total_extent_el = float(total_extent_el)
     slew_time = float(total_extent_az) / 2 / slew_speed
@@ -22,7 +24,7 @@ def generate_raster(total_extent_az, total_extent_el, az_resolution=0.05, el_res
     x_points = np.array([0])
     y_points = np.array([0])
     time_points = np.array([dwell_time])
-    comment = ["track"]
+    label = ["track"]
 
     for i in range(n_scans):
         # Time: the division is making a lot of zeros.
@@ -31,31 +33,31 @@ def generate_raster(total_extent_az, total_extent_el, az_resolution=0.05, el_res
         y_points = np.concatenate((y_points, np.linspace(y_points[-1], y_space[i], n_slew_points + 1, endpoint=False)[1:]))
         time_points = np.concatenate((time_points, np.ones(n_slew_points, dtype=int)*float(slew_time)/n_slew_points))
         for j in range(n_slew_points):
-            comment.append("slew")
+            label.append("slew")
 
         # Scan
         x_points = np.concatenate((x_points, x_space))
         y_points = np.concatenate((y_points, np.ones(len(x_space))*y_space[i]))
-        time_points = np.concatenate((time_points, np.ones(len(x_space), dtype=int) * float(scan_time)/ n_points_per_scan))
+        time_points = np.concatenate((time_points, np.ones(len(x_space), dtype=int) * float(scan_time) / n_points_per_scan))
         for j in range(len(x_space)):
-            comment.append("scan")
+            label.append("scan")
 
         # Slew back to the target
         x_points = np.concatenate((x_points, np.linspace(x_points[-1], 0, n_slew_points + 1, endpoint=False)[1:]))
         y_points = np.concatenate((y_points, np.linspace(y_points[-1], 0, n_slew_points + 1, endpoint=False)[1:]))
         time_points = np.concatenate((time_points, np.ones(n_slew_points, dtype=int) * float(slew_time) / n_slew_points))
         for j in range(n_slew_points):
-            comment.append("slew")
+            label.append("slew")
 
         x_points = np.concatenate((x_points, [0]))
         y_points = np.concatenate((y_points, [0]))
         time_points = np.concatenate((time_points, [dwell_time]))
-        comment.append("track")
+        label.append("track")
 
     time_points = np.cumsum(time_points)
     time_points -= time_points[0]
 
-    return x_points, y_points, time_points, comment
+    return x_points, y_points, time_points, label
 
 
 def update_line(num, data, line):
@@ -71,7 +73,8 @@ if __name__ == "__main__":
                       help="Extent (degrees) of raster scan in elevation. Default: 1.0")
     parser.add_option("-o", "--output-filename", action="store", type=str, dest="output_filename", default="output",
                       help="Name of the snap file to be generated. Default: output")
-    #parser.add_option()
+    parser.add_option("-p", "--plot", action="store_true", dest="plot", default=False,
+                      help="Plot animated illustration of scan on an x-y grid.")
 
     options, args = parser.parse_args()
 
@@ -87,7 +90,7 @@ if __name__ == "__main__":
     try:
         start_time = time.mktime(time.strptime(start_time_input, "%Y-%m-%d %H:%M:%S"))
     except ValueError:
-        print "Either start date or time are incorrectly formatted. Use: 2001-09-11 09:57:"
+        print "Either start date or time are incorrectly formatted. Use format: 2001-09-11 09:57:55"
         exit(-1)
 
     myTarget = katpoint.construct_azel_target(np.radians(target_az), np.radians(target_el))
@@ -95,9 +98,6 @@ if __name__ == "__main__":
     antenna = katpoint.Antenna(antenna_str)
     myTarget.antenna = antenna
     d_az, d_el, t, comment = generate_raster(raster_size_az, raster_size_el)
-
-    x, y = np.degrees(myTarget.sphere_to_plane(np.radians(target_az + d_az), np.radians(target_el + d_el)))
-    data = np.stack((x,y))
 
     print len(d_az), len(t), len(comment)
 
@@ -115,9 +115,12 @@ if __name__ == "__main__":
                                target_az + d_az[i], target_el + d_el[i]))
         output_file.write("stop")
 
-    fig = plt.figure()
-    plt.xlim(np.min(x) - 0.5, np.max(x) + 0.5)
-    plt.ylim(np.min(x) - 0.5, np.max(x) + 0.5)
-    my_line, = plt.plot([], [], '.')
-    line_ani = anim.FuncAnimation(fig, update_line, len(x), fargs=(data, my_line), interval=50, blit=True, repeat=False)
-    plt.show()
+    if options.plot:
+        x, y = np.degrees(myTarget.sphere_to_plane(np.radians(target_az + d_az), np.radians(target_el + d_el)))
+        data = np.stack((x, y))
+        fig = plt.figure()
+        plt.xlim(np.min(x) - 0.5, np.max(x) + 0.5)
+        plt.ylim(np.min(x) - 0.5, np.max(x) + 0.5)
+        my_line, = plt.plot([], [], '.')
+        line_ani = anim.FuncAnimation(fig, update_line, len(x), fargs=(data, my_line), interval=50, blit=True, repeat=False)
+        plt.show()
