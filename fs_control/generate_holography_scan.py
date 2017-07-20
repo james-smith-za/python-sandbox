@@ -71,19 +71,18 @@ if __name__ == "__main__":
                       help="Extent (degrees) of raster scan in elevation. Default: 1.0")
     parser.add_option("-o", "--output-filename", action="store", type=str, dest="output_filename", default="output",
                       help="Name of the snap file to be generated. Default: output")
-    parser.add_option()
+    #parser.add_option()
 
     options, args = parser.parse_args()
 
     if len(args) != 4:
-        parser.error("Incorrect number of arguments! Expected 3: <AZ> <EL> <START_DATE> <START_TIME>")
+        parser.error("Incorrect number of arguments! Expected 4: <AZ> <EL> <START_DATE> <START_TIME>")
     target_az, target_el = float(args[0]), float(args[1])
 
     raster_size_az = options.raster_size_az
     raster_size_el = options.raster_size_el
 
-    #target_az, target_el = 137.1, 80.8 # Astra 4A
-    output_filename = parser.output_filename
+    output_filename = options.output_filename
     start_time_input = args[2] + " " + args[3]
     try:
         start_time = time.mktime(time.strptime(start_time_input, "%Y-%m-%d %H:%M:%S"))
