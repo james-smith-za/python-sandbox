@@ -70,21 +70,27 @@ with open("%s.snp"%(file_name), mode="w") as output_file:
                timestamp += timestamp_increment()
 
     xy_points = np.array(xy_point_list)
-    plt.plot(xy_points[:,0], xy_points[:,1], '.')
-    plt.show()
 
     timestamps = np.array(timestamps)
     azel_points = np.degrees(myTarget.plane_to_sphere(np.radians(xy_points[:,0]), np.radians(xy_points[:,1]), timestamp=timestamps))
+    target_azel_points = np.degrees(myTarget.azel(timestamps))
+
+    if False:  # Change to True if you want a plot of the trajectory of the target and of the scan.
+        fig = plt.figure()
+        ax = fig.add_subplot(111)
+        ax.plot(target_azel_points[0], target_azel_points[1], 'r')
+        ax.plot(azel_points[0], azel_points[1], 'b')
+        plt.show()
+        plt.close(fig)
 
     for i in range(len(timestamps)):
         myTime = datetime.datetime.fromtimestamp(timestamps[i])
         output_file.write("\"%d,slew,nominal\n" % timestamps[i])
         output_file.write("!%s\n"%(myTime.strftime("%Y.%j.%H:%M:%S")))
         output_file.write("\"%d,track,nominal\n" % (timestamps[i] + settling_time))
-        output_file.write("azeloff=%.6fd,%.6fd\n"%((myTarget.azel()[0]) - azel_points[0][i],
-                                                   (myTarget.azel()[1]) - azel_points[1][i]))
+        output_file.write("azeloff=%.6fd,%.6fd\n"%(target_azel_points[0][i] - azel_points[0][i],
+                                                  (target_azel_points[1][i] - azel_points[1][i])))
 
     output_file.write("stop\n")
 
-plt.plot(azel_points[0], azel_points[1], '.')
-plt.show()
+
