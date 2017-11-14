@@ -3,7 +3,7 @@ The idea here is that you can tail the output of the file periodically to see if
 This could be useful for whatever purposes.
 
 At the moment, I can't see an easy way to do this asynchronously, only by polling the file for changes
-ever <sleep_time> seconds, but this should work well enough.
+every <sleep_time> seconds, but this should work well enough.
 '''
 import time
 
